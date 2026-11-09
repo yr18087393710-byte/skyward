@@ -58,22 +58,55 @@ oneshot = true
 user = "root"
 groups = ["root", "system", "wakelock", "graphics"]
 
-# ============ 以下依据 Xiaomi 17 系列（sm8850）实测可解密的 recovery 反推 ============
-# 三处与原厂 rc 不同，都是那个 recovery 为了在 recovery 里跑通而改的：
-#   1. ADSP 固件必须先启动        （原厂由 init 在开机时做，skyward 不做）
-#   2. keymint/gatekeeper 以 root 运行（原厂是 system）
-#   3. SPU 关掉、走 TEE 通路       （原厂 is_security_level_spu=1，recovery 里要 0）
+# ---- what a working sm8850 recovery (17 Pro = pandora) brings up ----
 
-# 启动 ADSP：PMIC 与安全世界的监听要靠它，没起来 qseecomd 注册不上。
+# Boot ADSP: the PMIC and the secure world's listeners need it.
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "sleep 1; echo 1 > /sys/kernel/boot_adsp/boot 2>/dev/null; sleep 1; echo 1 > /sys/kernel/boot_adsp/ssr 2>/dev/null; true"]
+args = ["-c", "sleep 1; echo 1 > /sys/kernel/boot_adsp/boot; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
 groups = ["root"]
 
-# 安全世界往 Android 侧回调要靠这个守护进程注册监听。
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "echo 1 > /sys/kernel/boot_adsp/ssr; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+# The DMA-BUF heaps the secure world's apps are loaded through: init makes
+# them as the kernel announces them, and a recovery runs no init. Without
+# them every applet load answers 23, "not authorized".
+[[service]]
+path = "/vendor/bin/sh"
+args = ['-c', '''
+mkdir -p /dev/dma_heap
+for d in /sys/class/dma_heap/*; do
+    [ -e "$d/dev" ] || continue
+    n=${d##*/}
+    [ -e "/dev/dma_heap/$n" ] && continue
+    r=$(cat "$d/dev" 2>/dev/null) || continue
+    mknod -m 0444 "/dev/dma_heap/$n" c "${r%%:*}" "${r##*:}"
+done
+[ -e /dev/dma_heap/qcom,qseecom ] || mknod -m 0444 /dev/dma_heap/qcom,qseecom c 248 5
+[ -e /dev/dma_heap/qcom,qseecom-ta ] || mknod -m 0444 /dev/dma_heap/qcom,qseecom-ta c 248 6
+chown system:system /dev/dma_heap/* 2>/dev/null
+chmod 0444 /dev/dma_heap/* 2>/dev/null
+r=$(cat /sys/class/misc/smcinvoke/dev 2>/dev/null) || r=494:0
+[ -e /dev/smcinvoke ] || mknod -m 0660 /dev/smcinvoke c "${r%%:*}" "${r##*:}"
+chown system:drmrpc /dev/smcinvoke 2>/dev/null
+chmod 0660 /dev/smcinvoke 2>/dev/null
+true
+''']
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+# Registers the listeners the secure world calls back through.
 [[service]]
 path = "/vendor/bin/qseecomd"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
@@ -81,7 +114,7 @@ ready_property = "vendor.sys.listeners.registered"
 user = "root"
 groups = ["root", "drmrpc"]
 
-# 访问安全世界里的 TA 的通道，首次用到时从 /vendor/firmware_mnt/image 加载。
+# The channel the secure world's apps are reached through.
 [[service]]
 path = "/vendor/bin/hlosminkdaemon"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
@@ -89,41 +122,50 @@ user = "system"
 groups = ["system", "oem_2912", "wakelock"]
 capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
 
-# key service：唯一能用硬件包裹密钥的程序。整盘加密的密钥就靠它解包。
-# 以 root 运行，与那个 recovery 的 rc 一致。
+# The key service, the only one that can unwrap the disk key.
 [[service]]
 path = "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64"]
 ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
 registers = [
     "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
     "android.hardware.security.secureclock.ISecureClock/default",
     "android.hardware.security.sharedsecret.ISharedSecret/default",
 ]
-user = "root"
-groups = ["root", "drmrpc"]
+user = "system"
+groups = ["system", "drmrpc"]
 
-# recovery 里没有 SPU，gatekeeper 必须走 TEE 通路。
+# A recovery has no SPU, so gatekeeper goes through the TEE.
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "/system/bin/setprop vendor.gatekeeper.disable_spu true; /system/bin/setprop vendor.gatekeeper.is_security_level_spu 0; true"]
+args = ["-c", "setprop vendor.gatekeeper.disable_spu true; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
 groups = ["root"]
 
-# gatekeeper：让安全世界校验锁屏密码，并发出 key service 需要的凭据。
 [[service]]
-path = "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
+path = "/vendor/bin/sh"
+args = ["-c", "setprop vendor.gatekeeper.is_security_level_spu 0; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
 user = "root"
 groups = ["root"]
 
-# weaver：17 Pro 用的是 NXP 那一路（不是 17 Ultra 的 Goodix）。
+# Checks the screen lock and hands the key service its token.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
+user = "system"
+groups = ["system"]
+
+# The weaver keeps the hardware half of the user's key, so the key service
+# can be reached once the screen lock has been given.
 [[service]]
 path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.xml"
 user = "root"
 groups = ["root"]
 
@@ -154,6 +196,10 @@ recovery = "98aa593c95e9cd3a79f9cbd95f49e240f9dda482640083a3e89ff4d3164d0852"
 # qcom-hv-haptics (qcom,hv-haptics in its dtbo), with the click made from
 # samples at the motor's resonant frequency as on the 17 Ultra. The
 # strengths are the 17 Ultra's, which were felt on that phone's motor.
+[haptics]
+resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
+strength = { lightest = 0.25, strongest = 0.75 }
+a's, which were felt on that phone's motor.
 [haptics]
 resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
 strength = { lightest = 0.25, strongest = 0.75 }
