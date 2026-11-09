@@ -134,19 +134,38 @@ oneshot = true
 user = "root"
 groups = ["root"]
 
-# weaver：17 Ultra 用的是 /odm/bin/hw/android.hardware.weaver-service 这个
-# 通用程序，同平台的 vendor 一样，17 Pro 上那个 .nxp-qti 一启动就中止。
+# secure element：weaver 的钥匙环就在这颗 eSE 里，没有它，weaver 在初始化
+# 的第一行就中止。这是 17 Pro 自己的 NXP 那一路。
 [[service]]
-path = "/odm/bin/hw/android.hardware.weaver-service"
+path = "/vendor/bin/hw/android.hardware.secure_element-service.qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+user = "root"
+groups = ["root", "nfc", "system"]
+
+# 给上面的 eSE 一点时间把卡片读起来，程序和 init 脚本里写的一样。
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "sleep 3; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+# OMAPI：weaver 通过它和 eSE 说话。
+[[service]]
+path = "/system/bin/se_omapi"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.se.omapi.ISecureElementService/default"
+user = "root"
+groups = ["root"]
+
+# weaver：NXP 那一路，钥匙环本身。
+[[service]]
+path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 registers = ["android.hardware.weaver.IWeaver/default"]
-user = "system"
-groups = ["system", "drmrpc"]
-capabilities = ["WAKE_ALARM"]
-
-# WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
-# 17 Ultra, whose vendor partition this phone shares file for file but for
-# its build properties, a power hint and two radio libraries.
+user = "root"
+groups = ["root"]
 
 [wlan]
 modules = ["rfkill", "qca_cld3_peach_v2"]
