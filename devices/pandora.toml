@@ -120,17 +120,6 @@ ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
 user = "root"
 groups = ["root"]
 
-# weaver：17 Pro 用的是 NXP 那一路（不是 17 Ultra 的 Goodix）。
-[[service]]
-path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-user = "root"
-groups = ["root"]
-
-# WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
-# 17 Ultra, whose vendor partition this phone shares file for file but for
-# its build properties, a power hint and two radio libraries.
-
 # The DMA-BUF heaps and the channel the secure world's programs are loaded
 # through: init makes them as the kernel announces them, and a recovery runs
 # no init. A program of the secure world that finds none loads no app at
@@ -144,6 +133,20 @@ libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
 groups = ["root"]
+
+# weaver：17 Ultra 用的是 /odm/bin/hw/android.hardware.weaver-service 这个
+# 通用程序，同平台的 vendor 一样，17 Pro 上那个 .nxp-qti 一启动就中止。
+[[service]]
+path = "/odm/bin/hw/android.hardware.weaver-service"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.xml"
+user = "system"
+groups = ["system", "drmrpc"]
+capabilities = ["WAKE_ALARM"]
+
+# WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
+# 17 Ultra, whose vendor partition this phone shares file for file but for
+# its build properties, a power hint and two radio libraries.
 
 [wlan]
 modules = ["rfkill", "qca_cld3_peach_v2"]
