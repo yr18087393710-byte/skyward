@@ -58,55 +58,22 @@ oneshot = true
 user = "root"
 groups = ["root", "system", "wakelock", "graphics"]
 
-# ---- what a working sm8850 recovery (17 Pro = pandora) brings up ----
+# ============ 以下依据 Xiaomi 17 系列（sm8850）实测可解密的 recovery 反推 ============
+# 三处与原厂 rc 不同，都是那个 recovery 为了在 recovery 里跑通而改的：
+#   1. ADSP 固件必须先启动        （原厂由 init 在开机时做，skyward 不做）
+#   2. keymint/gatekeeper 以 root 运行（原厂是 system）
+#   3. SPU 关掉、走 TEE 通路       （原厂 is_security_level_spu=1，recovery 里要 0）
 
-# Boot ADSP: the PMIC and the secure world's listeners need it.
+# 启动 ADSP：PMIC 与安全世界的监听要靠它，没起来 qseecomd 注册不上。
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "sleep 1; echo 1 > /sys/kernel/boot_adsp/boot; true"]
+args = ["-c", "sleep 1; echo 1 > /sys/kernel/boot_adsp/boot 2>/dev/null; sleep 1; echo 1 > /sys/kernel/boot_adsp/ssr 2>/dev/null; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
 groups = ["root"]
 
-[[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "echo 1 > /sys/kernel/boot_adsp/ssr; true"]
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
-
-# The DMA-BUF heaps the secure world's apps are loaded through: init makes
-# them as the kernel announces them, and a recovery runs no init. Without
-# them every applet load answers 23, "not authorized".
-[[service]]
-path = "/vendor/bin/sh"
-args = ['-c', '''
-mkdir -p /dev/dma_heap
-for d in /sys/class/dma_heap/*; do
-    [ -e "$d/dev" ] || continue
-    n=${d##*/}
-    [ -e "/dev/dma_heap/$n" ] && continue
-    r=$(cat "$d/dev" 2>/dev/null) || continue
-    mknod -m 0444 "/dev/dma_heap/$n" c "${r%%:*}" "${r##*:}"
-done
-[ -e /dev/dma_heap/qcom,qseecom ] || mknod -m 0444 /dev/dma_heap/qcom,qseecom c 248 5
-[ -e /dev/dma_heap/qcom,qseecom-ta ] || mknod -m 0444 /dev/dma_heap/qcom,qseecom-ta c 248 6
-chown system:system /dev/dma_heap/* 2>/dev/null
-chmod 0444 /dev/dma_heap/* 2>/dev/null
-r=$(cat /sys/class/misc/smcinvoke/dev 2>/dev/null) || r=494:0
-[ -e /dev/smcinvoke ] || mknod -m 0660 /dev/smcinvoke c "${r%%:*}" "${r##*:}"
-chown system:drmrpc /dev/smcinvoke 2>/dev/null
-chmod 0660 /dev/smcinvoke 2>/dev/null
-true
-''']
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
-
-# Registers the listeners the secure world calls back through.
+# 安全世界往 Android 侧回调要靠这个守护进程注册监听。
 [[service]]
 path = "/vendor/bin/qseecomd"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
@@ -114,7 +81,7 @@ ready_property = "vendor.sys.listeners.registered"
 user = "root"
 groups = ["root", "drmrpc"]
 
-# The channel the secure world's apps are reached through.
+# 访问安全世界里的 TA 的通道，首次用到时从 /vendor/firmware_mnt/image 加载。
 [[service]]
 path = "/vendor/bin/hlosminkdaemon"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
@@ -122,56 +89,62 @@ user = "system"
 groups = ["system", "oem_2912", "wakelock"]
 capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
 
-# The key service, the only one that can unwrap the disk key.
+# key service：唯一能用硬件包裹密钥的程序。整盘加密的密钥就靠它解包。
+# 以 root 运行，与那个 recovery 的 rc 一致。
 [[service]]
 path = "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
 registers = [
     "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
     "android.hardware.security.secureclock.ISecureClock/default",
     "android.hardware.security.sharedsecret.ISharedSecret/default",
 ]
-user = "system"
-groups = ["system", "drmrpc"]
+user = "root"
+groups = ["root", "drmrpc"]
 
-# A recovery has no SPU, so gatekeeper goes through the TEE.
+# recovery 里没有 SPU，gatekeeper 必须走 TEE 通路。
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "setprop vendor.gatekeeper.disable_spu true; true"]
+args = ["-c", "/system/bin/setprop vendor.gatekeeper.disable_spu true; /system/bin/setprop vendor.gatekeeper.is_security_level_spu 0; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
 groups = ["root"]
 
-[[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "setprop vendor.gatekeeper.is_security_level_spu 0; true"]
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
-
-# Checks the screen lock and hands the key service its token.
+# gatekeeper：让安全世界校验锁屏密码，并发出 key service 需要的凭据。
 [[service]]
 path = "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
-user = "system"
-groups = ["system"]
+user = "root"
+groups = ["root"]
 
-# The weaver keeps the hardware half of the user's key, so the key service
-# can be reached once the screen lock has been given.
+# weaver：17 Pro 用的是 NXP 那一路（不是 17 Ultra 的 Goodix）。
 [[service]]
 path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.xml"
 user = "root"
 groups = ["root"]
 
 # WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
 # 17 Ultra, whose vendor partition this phone shares file for file but for
 # its build properties, a power hint and two radio libraries.
+
+# The DMA-BUF heaps and the channel the secure world's programs are loaded
+# through: init makes them as the kernel announces them, and a recovery runs
+# no init. A program of the secure world that finds none loads no app at
+# all, and the key service then dies the first time it is asked anything.
+# This runs last, so that nothing waits on it: the key service is not used
+# until someone opens the data partition, long after the boot is done.
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "mkdir -p /dev/dma_heap; mknod -m 0444 /dev/dma_heap/qcom,system c 248 0; mknod -m 0444 /dev/dma_heap/system c 248 1; mknod -m 0444 /dev/dma_heap/qcom,qseecom c 248 5; mknod -m 0444 /dev/dma_heap/qcom,qseecom-ta c 248 6; mknod -m 0660 /dev/smcinvoke c 494 0; chown system:system /dev/dma_heap/*; chmod 0444 /dev/dma_heap/*; chown system:drmrpc /dev/smcinvoke; chmod 0660 /dev/smcinvoke; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
 [wlan]
 modules = ["rfkill", "qca_cld3_peach_v2"]
 writes = [{ path = "/sys/kernel/cnss/fs_ready", value = "1" }]
@@ -199,3 +172,4 @@ recovery = "98aa593c95e9cd3a79f9cbd95f49e240f9dda482640083a3e89ff4d3164d0852"
 [haptics]
 resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
 strength = { lightest = 0.25, strongest = 0.75 }
+trongest = 0.75 }
