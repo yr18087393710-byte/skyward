@@ -105,6 +105,7 @@ args = ["-c", "/system/bin/setprop vendor.gatekeeper.is_security_level_spu 1 || 
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
+groups = ["root"]
 
 # gatekeeper：让安全世界校验锁屏密码，并发出 key service 需要的凭据。
 [[service]]
