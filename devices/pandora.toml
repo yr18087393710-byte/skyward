@@ -69,9 +69,20 @@ groups = ["root", "system", "wakelock", "graphics"]
 [[service]]
 path = "/vendor/bin/qseecomd"
 libraries = ["/system/lib64", "/vendor/lib64"]
-ready_property = "vendor.sys.listeners.registered"
 user = "root"
 groups = ["root", "drmrpc"]
+
+# 给 qseecomd 两秒把安全世界的通道建起来。
+# 原来这里是 ready_property = "vendor.sys.listeners.registered"，
+# 但那个属性在 recovery 里未必有人设；skyward 等不到就会放弃启动
+# 后面的全部服务，keymint 于是永远不出现。改成定时等待更稳。
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "/system/bin/sleep 2 || true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
 
 # 访问安全世界里的 TA（trusted application）的通道，
 # 首次用到时从 /vendor/firmware_mnt/image 加载。
