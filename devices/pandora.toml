@@ -16,8 +16,10 @@ density = 520
 sources = ["vendor_boot", "vendor_dlkm", "vendor", "system_dlkm"]
 # The touchscreen comes from two makers: Synaptics TouchComm and FocalTech,
 # both behind Xiaomi's touch layer. The phone's own modules.load lists both
-# drivers, and only the one whose controller is fitted finds it.
-load = ["synaptics_tcm2", "focaltech_touch"]
+# drivers, and only the one whose controller is fitted finds it. The NFC
+# controller's driver makes the node the phone's NFC HAL talks to the
+# secure element through, which the phone's own init loads before it.
+load = ["synaptics_tcm2", "focaltech_touch", "nxp-nci"]
 
 # As on the 17 Ultra, the controller comes back from its reset sending raw
 # frames for /odm/lib64/libtouchreport.so, which a recovery runs none of;
@@ -58,123 +60,100 @@ oneshot = true
 user = "root"
 groups = ["root", "system", "wakelock", "graphics"]
 
-# ============ 以下依据 Xiaomi 17 系列（sm8850）实测可解密的 recovery 反推 ============
-# 三处与原厂 rc 不同，都是那个 recovery 为了在 recovery 里跑通而改的：
-#   1. ADSP 固件必须先启动        （原厂由 init 在开机时做，skyward 不做）
-#   2. keymint/gatekeeper 以 root 运行（原厂是 system）
-#   3. SPU 关掉、走 TEE 通路       （原厂 is_security_level_spu=1，recovery 里要 0）
+# The secure world's programs, in the order the installed system's init
+# starts them; without them nothing can use a key the phone wrapped in
+# hardware, and the data partition cannot be opened. The 17 Ultra's vendor
+# partition is this phone's file for file, so it names the same programs.
 
-# 启动 ADSP：PMIC 与安全世界的监听要靠它，没起来 qseecomd 注册不上。
-[[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "sleep 1; echo 1 > /sys/kernel/boot_adsp/boot 2>/dev/null; sleep 1; echo 1 > /sys/kernel/boot_adsp/ssr 2>/dev/null; true"]
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
-
-# 安全世界往 Android 侧回调要靠这个守护进程注册监听。
+# The secure world reaches back into Android through the listeners this
+# daemon registers; without them the key service cannot use any key.
 [[service]]
 path = "/vendor/bin/qseecomd"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64"]
 ready_property = "vendor.sys.listeners.registered"
 user = "root"
 groups = ["root", "drmrpc"]
 
-# 访问安全世界里的 TA 的通道，首次用到时从 /vendor/firmware_mnt/image 加载。
+# The opener the secure world's apps are reached through by programs that
+# speak to them as GlobalPlatform's TEE client does, which loads those apps
+# from /vendor/firmware_mnt/image as they are first asked for.
 [[service]]
 path = "/vendor/bin/hlosminkdaemon"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64"]
 user = "system"
 groups = ["system", "oem_2912", "wakelock"]
 capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
 
-# key service：唯一能用硬件包裹密钥的程序。整盘加密的密钥就靠它解包。
-# 以 root 运行，与那个 recovery 的 rc 一致。
+# The key service, which is the only thing that can use the keys the phone
+# wrapped in hardware. The same program serves the secure clock and the
+# shared secret, which the phone describes apart from it.
 [[service]]
 path = "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64"]
 ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
 registers = [
     "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
     "android.hardware.security.secureclock.ISecureClock/default",
     "android.hardware.security.sharedsecret.ISharedSecret/default",
 ]
-user = "root"
-groups = ["root", "drmrpc"]
+user = "system"
+groups = ["system", "drmrpc"]
 
-# recovery 里没有 SPU，gatekeeper 必须走 TEE 通路。
-[[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "/system/bin/setprop vendor.gatekeeper.disable_spu true; /system/bin/setprop vendor.gatekeeper.is_security_level_spu 0; true"]
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
-
-# gatekeeper：让安全世界校验锁屏密码，并发出 key service 需要的凭据。
+# The credential service: it is what the secure world has check the secret
+# behind a screen lock, and the only thing that can hand out the note the
+# key service wants before it will use a key that secret guards.
 [[service]]
 path = "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
-user = "root"
-groups = ["root"]
-
-# The DMA-BUF heaps and the channel the secure world's programs are loaded
-# through: init makes them as the kernel announces them, and a recovery runs
-# no init. A program of the secure world that finds none loads no app at
-# all, and the key service then dies the first time it is asked anything.
-# This runs last, so that nothing waits on it: the key service is not used
-# until someone opens the data partition, long after the boot is done.
-[[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "mkdir -p /dev/dma_heap; mknod -m 0444 /dev/dma_heap/qcom,system c 248 0; mknod -m 0444 /dev/dma_heap/system c 248 1; mknod -m 0444 /dev/dma_heap/qcom,qseecom c 248 5; mknod -m 0444 /dev/dma_heap/qcom,qseecom-ta c 248 6; mknod -m 0660 /dev/smcinvoke c 494 0; chown system:system /dev/dma_heap/*; chmod 0444 /dev/dma_heap/*; chown system:drmrpc /dev/smcinvoke; chmod 0660 /dev/smcinvoke; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
+ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
+user = "system"
+groups = ["system"]
 
-# secure element：weaver 的钥匙环就在这颗 eSE 里，没有它，weaver 在初始化
-# 的第一行就中止。这是 17 Pro 自己的 NXP 那一路。
+# The secure element: the phone's embedded one, which its own programs
+# reach through the HAL its vendor partition carries. The weaver's slots are
+# in it, so it runs before the weaver. It reaches the chip through the node
+# the NFC controller's driver makes, so that module is loaded first.
 [[service]]
 path = "/vendor/bin/hw/android.hardware.secure_element-service.qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-user = "root"
-groups = ["root", "nfc", "system"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+ready_service = "android.hardware.secure_element.ISecureElement/eSE1"
+user = "system"
+groups = ["nfc", "system"]
 
-# 给上面的 eSE 一点时间把卡片读起来，程序和 init 脚本里写的一样。
+# The service the weaver asks the secure element's applets through. Android
+# keeps it in its framework, which a recovery runs none of, so the phone's
+# own program for it is taken from where the installed system keeps it and
+# run here: it answers as the OMAPI service over that secure element HAL.
+# Whichever copy is found is staged into the recovery's own root, where it
+# can be given a mode to run; nothing fails if none is, since the weaver
+# alone is what goes without.
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "sleep 3; true"]
+args = ["-c", "mkdir -p /opt/se; for p in /mnt/system/system/bin/se_omapi /system/bin/se_omapi /persist/se_omapi /mnt/vendor/persist/se_omapi; do if [ -f $p ]; then cp $p /opt/se/se_omapi; chmod 0755 /opt/se/se_omapi; break; fi; done; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
 groups = ["root"]
 
-# OMAPI：weaver 通过它和 eSE 说话。
 [[service]]
-path = "/system/bin/se_omapi"
-libraries = ["/system/lib64", "/vendor/lib64"]
+path = "/opt/se/se_omapi"
+libraries = ["/opt/se", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
 ready_service = "android.se.omapi.ISecureElementService/default"
-user = "root"
-groups = ["root"]
 
-# weaver：NXP 那一路，钥匙环本身。
+# The weaver, in the phone's NXP secure element, behind the program the
+# installed system's init enables as vendor.weaver_nxp. Every user's secret
+# is bound to a slot of it, with a screen lock or without, so without it
+# none of the users' own files open. It runs as root: its own libraries ask
+# for the installed system's libvndksupport, which the linker only searches
+# for a program that does not change its user.
 [[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "for d in /persist /mnt/vendor/persist; do if [ -f $d/weaver-service ]; then cp $d/weaver-service /weaver-service; chmod 0755 /weaver-service; break; fi; done; true"]
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
+path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+ready_service = "android.hardware.weaver.IWeaver/default"
 
-[[service]]
-path = "/weaver-service"
-libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-registers = ["android.hardware.weaver.IWeaver/default"]
-user = "root"
-groups = ["root"]
-
+# WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
+# 17 Ultra, whose vendor partition this phone shares file for file but for
+# its build properties, a power hint and two radio libraries.
 [wlan]
 modules = ["rfkill", "qca_cld3_peach_v2"]
 writes = [{ path = "/sys/kernel/cnss/fs_ready", value = "1" }]
