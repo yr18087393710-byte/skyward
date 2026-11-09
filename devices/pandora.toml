@@ -199,7 +199,3 @@ recovery = "98aa593c95e9cd3a79f9cbd95f49e240f9dda482640083a3e89ff4d3164d0852"
 [haptics]
 resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
 strength = { lightest = 0.25, strongest = 0.75 }
-a's, which were felt on that phone's motor.
-[haptics]
-resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
-strength = { lightest = 0.25, strongest = 0.75 }
