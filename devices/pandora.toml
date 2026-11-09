@@ -58,50 +58,55 @@ oneshot = true
 user = "root"
 groups = ["root", "system", "wakelock", "graphics"]
 
-# ---------------------------------------------------------------- 加密相关
-# 以下四项是解开 data 分区的前提，取自 nezha（17 Ultra，已实测可解密）。
-# 17 Pro 与 17 Ultra 的 vendor 分区几乎逐文件相同，所以路径应当一致；
-# 但**必须先在 pandora 的 vendor/odm 镜像里确认这几个二进制存在**，
-# 再决定是否启用。用 tools/check-vendor.sh 检查。
+# ============ 以下依据 Xiaomi 17 系列（sm8850）实测可解密的 recovery 反推 ============
+# 三处与原厂 rc 不同，都是那个 recovery 为了在 recovery 里跑通而改的：
+#   1. ADSP 固件必须先启动        （原厂由 init 在开机时做，skyward 不做）
+#   2. keymint/gatekeeper 以 root 运行（原厂是 system）
+#   3. SPU 关掉、走 TEE 通路       （原厂 is_security_level_spu=1，recovery 里要 0）
 
-# 安全世界往 Android 侧回调要靠这个守护进程注册监听；
-# 没有它，key service 一把密钥都用不了。
+# 启动 ADSP：PMIC 与安全世界的监听要靠它，没起来 qseecomd 注册不上。
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "sleep 1; echo 1 > /sys/kernel/boot_adsp/boot 2>/dev/null; sleep 1; echo 1 > /sys/kernel/boot_adsp/ssr 2>/dev/null; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+# 安全世界往 Android 侧回调要靠这个守护进程注册监听。
 [[service]]
 path = "/vendor/bin/qseecomd"
-libraries = ["/system/lib64", "/vendor/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 ready_property = "vendor.sys.listeners.registered"
 user = "root"
 groups = ["root", "drmrpc"]
 
-# 访问安全世界里的 TA（trusted application）的通道，
-# 首次用到时从 /vendor/firmware_mnt/image 加载。
+# 访问安全世界里的 TA 的通道，首次用到时从 /vendor/firmware_mnt/image 加载。
 [[service]]
 path = "/vendor/bin/hlosminkdaemon"
-libraries = ["/system/lib64", "/vendor/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 user = "system"
 groups = ["system", "oem_2912", "wakelock"]
 capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
 
 # key service：唯一能用硬件包裹密钥的程序。整盘加密的密钥就靠它解包。
+# 以 root 运行，与那个 recovery 的 rc 一致。
 [[service]]
 path = "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
 registers = [
     "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
     "android.hardware.security.secureclock.ISecureClock/default",
     "android.hardware.security.sharedsecret.ISharedSecret/default",
 ]
-user = "system"
-groups = ["system", "drmrpc"]
+user = "root"
+groups = ["root", "drmrpc"]
 
-# 原厂 init 靠这个属性决定 gatekeeper 走 SPU 还是 TEE，它的值写在
-# /vendor/build.prop 里（这台机器是 1）。recovery 的属性服务不一定会把
-# vendor 的 build.prop 读进来，所以这里显式设一次，作为一道保险。
-# 失败不拦后续：末尾的 || true 保证 oneshot 正常结束。
+# recovery 里没有 SPU，gatekeeper 必须走 TEE 通路。
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "/system/bin/setprop vendor.gatekeeper.is_security_level_spu 1 || true"]
+args = ["-c", "/system/bin/setprop vendor.gatekeeper.disable_spu true; /system/bin/setprop vendor.gatekeeper.is_security_level_spu 0; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
@@ -110,31 +115,17 @@ groups = ["root"]
 # gatekeeper：让安全世界校验锁屏密码，并发出 key service 需要的凭据。
 [[service]]
 path = "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti"
-libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64"]
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
-user = "system"
-groups = ["system"]
+user = "root"
+groups = ["root"]
 
-# weaver：把每个用户的密钥绑定到安全元件的一个槽位，没设锁屏的用户也有。
-# 只有 odm 属性里 ro.special_edition=true 的机器才有（Goodix 安全元件）。
+# weaver：17 Pro 用的是 NXP 那一路（不是 17 Ultra 的 Goodix）。
 [[service]]
-path = "/odm/bin/hw/android.hardware.secure_element-service-goodix"
-libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
-ready_service = "android.hardware.secure_element.ISecureElement/eSE2"
-registers = ["vendor.goodix.hardware.secure_element_aidl.IGdxEse/default"]
-description = "/odm/etc/secure_element-service-goodixsp.xml"
-when = { property = "ro.special_edition", value = "true" }
-user = "system"
-groups = ["system"]
-
-[[service]]
-path = "/odm/bin/hw/android.hardware.weaver-service"
-libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
-ready_service = "android.hardware.weaver.IWeaver/default"
-when = { property = "ro.special_edition", value = "true" }
-user = "system"
-groups = ["system", "drmrpc"]
-capabilities = ["WAKE_ALARM"]
+path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
+user = "root"
+groups = ["root"]
 
 # WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
 # 17 Ultra, whose vendor partition this phone shares file for file but for
@@ -146,6 +137,27 @@ interface = "wlan0"
 supplicant = "/vendor/bin/hw/wpa_supplicant"
 libraries = ["/system/lib64", "/vendor/lib64"]
 service = "android.hardware.wifi.supplicant.ISupplicant/default"
+probe = "http://connect.rom.miui.com/generate_204"
+
+# The update server the stock updater of the Chinese system asks.
+[update]
+server = "https://update.miui.com/updates/miotaV3.php"
+
+# The stock build the recovery is made on: the Chinese system's OS4.0.4.0,
+# whose full update package on the phone maker's own download server holds
+# the recovery partition the recovery is built on top of.
+[stock]
+version = "OS4.0.4.0.XBLCNXM"
+package = "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS4.0.4.0.XBLCNXM/pandora-ota_full-OS4.0.4.0.XBLCNXM-user-17.0-8b5f4d5781.zip"
+recovery = "98aa593c95e9cd3a79f9cbd95f49e240f9dda482640083a3e89ff4d3164d0852"
+
+# qcom-hv-haptics (qcom,hv-haptics in its dtbo), with the click made from
+# samples at the motor's resonant frequency as on the 17 Ultra. The
+# strengths are the 17 Ultra's, which were felt on that phone's motor.
+[haptics]
+resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
+strength = { lightest = 0.25, strongest = 0.75 }
+fault"
 probe = "http://connect.rom.miui.com/generate_204"
 
 # The update server the stock updater of the Chinese system asks.
