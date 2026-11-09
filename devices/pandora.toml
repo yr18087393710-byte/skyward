@@ -139,7 +139,7 @@ groups = ["root"]
 [[service]]
 path = "/odm/bin/hw/android.hardware.weaver-service"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
-description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.xml"
+registers = ["android.hardware.weaver.IWeaver/default"]
 user = "system"
 groups = ["system", "drmrpc"]
 capabilities = ["WAKE_ALARM"]
