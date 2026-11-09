@@ -161,7 +161,15 @@ groups = ["root"]
 
 # weaver：NXP 那一路，钥匙环本身。
 [[service]]
-path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+path = "/vendor/bin/sh"
+args = ["-c", "for d in /persist /mnt/vendor/persist; do if [ -f $d/weaver-service ]; then cp $d/weaver-service /weaver-service; chmod 0755 /weaver-service; break; fi; done; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
+
+[[service]]
+path = "/weaver-service"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64"]
 registers = ["android.hardware.weaver.IWeaver/default"]
 user = "root"
