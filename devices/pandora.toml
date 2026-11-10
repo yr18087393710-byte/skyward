@@ -121,13 +121,17 @@ user = "system"
 groups = ["nfc", "system"]
 
 # The service the weaver asks the secure element's applets through. Android
-# keeps it in its framework, which a recovery runs none of. This phone's own
-# binary cannot serve: the installed system keeps that service in
-# com.android.se, a program of its own that only a running framework starts.
-# The recovery therefore carries its own se_omapi, built with init's
-# seclabel, staged from persist into the recovery's root, where it can be
-# given a mode to run. It answers as the OMAPI service over the secure
-# element HAL, as the phone's own init has it run.
+# keeps it in its framework, which a recovery runs none of: the installed
+# system answers it from com.android.se, a program of its own that only a
+# running framework starts. The recovery runs its own se_omapi instead, one
+# built to run here with init's seclabel, staged out of the persist
+# partition into the recovery's own root, where it can be given a mode.
+#
+# It is started without being waited on. A program that registers nothing
+# would hold up every program after it for the whole ready timeout, and the
+# weaver is what has to run: left to itself, the weaver starts, fails while
+# no service answers, and is started again, so it meets the service as soon
+# as the service is there.
 [[service]]
 path = "/vendor/bin/sh"
 args = ["-c", "mkdir -p /opt/se; d=/mnt/vendor/persist/se; [ -d $d ] || d=/persist/se; for f in se_omapi android.se.omapi-V1-ndk.so libQSEEComAPI.so; do if [ -f $d/$f ]; then cp -f $d/$f /opt/se/$f; fi; done; chmod 0755 /opt/se/se_omapi 2>/dev/null; true"]
@@ -139,7 +143,22 @@ groups = ["root"]
 [[service]]
 path = "/opt/se/se_omapi"
 libraries = ["/opt/se", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
-ready_service = "android.se.omapi.ISecureElementService/default"
+# Named for the description the directory needs of it, not for waiting on
+# it: a program is waited on before the programs after it are started, and
+# the weaver must be started whether or not this one has registered yet.
+registers = ["android.se.omapi.ISecureElementService/default"]
+
+# What the service directory holds once the two are given their moment,
+# written where the running system can read it: the next start is set by
+# what it says, and a service that never registered says so here rather
+# than in a timeout that stops the programs behind it.
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "sleep 4; { LD_LIBRARY_PATH=/mnt/system/system/lib64:/mnt/system/system/lib64/bootstrap /mnt/system/system/bin/service list; } > /mnt/vendor/persist/service-list.txt 2>&1; true"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root"]
 
 # The weaver, in the phone's NXP secure element, behind the program the
 # installed system's init enables as vendor.weaver_nxp. Every user's secret
