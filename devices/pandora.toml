@@ -150,18 +150,6 @@ libraries = ["/system/lib64", "/vendor/lib64"]
 user = "root"
 groups = ["root"]
 
-# What the service directory holds once the two are given their moment,
-# written where the running system can read it: the next start is set by
-# what it says, and a service that never registered says so here rather
-# than in a timeout that stops the programs behind it.
-[[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "sleep 4; { LD_LIBRARY_PATH=/mnt/system/system/lib64:/mnt/system/system/lib64/bootstrap /mnt/system/system/bin/service list; } > /mnt/vendor/persist/service-list.txt 2>&1; true"]
-libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
-user = "root"
-groups = ["root"]
-
 # The weaver, in the phone's NXP secure element, behind the program the
 # installed system's init enables as vendor.weaver_nxp. Every user's secret
 # is bound to a slot of it, with a screen lock or without, so without it
