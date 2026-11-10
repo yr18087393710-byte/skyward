@@ -146,7 +146,14 @@ libraries = ["/opt/se", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor
 # Named for the description the directory needs of it, not for waiting on
 # it: a program is waited on before the programs after it are started, and
 # the weaver must be started whether or not this one has registered yet.
+#
+# The directory turns away a service the recovery's own description does not
+# name, and the installed system carries none for this one: it keeps the
+# service in a program of its framework, which a description has no place
+# for. A description is written beside the program instead, and published
+# as the directory's own.
 registers = ["android.se.omapi.ISecureElementService/default"]
+description = "/mnt/vendor/persist/se/se_omapi.xml"
 
 # What the service directory holds once the two are given their moment,
 # written where the running system can read it: the next start is set by
@@ -170,6 +177,10 @@ groups = ["root"]
 path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
 libraries = ["/system/lib64", "/vendor/lib64", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
 ready_service = "android.hardware.weaver.IWeaver/default"
+# What the phone's own partitions say of it, which the recovery names as its
+# own: read whole rather than matched by name, since the file this phone
+# keeps it in is named for the vendor that built it, not for the service.
+description = "/odm/etc/vintf/manifest/android.hardware.weaver-service.nxp.xml"
 
 # WLAN: Qualcomm's Peach on PCIe (qcom,cnss-peach in its dtbo), as on the
 # 17 Ultra, whose vendor partition this phone shares file for file but for
