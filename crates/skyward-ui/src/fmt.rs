@@ -56,38 +56,36 @@ pub fn explain(lang: Lang, why: &str) -> String {
     const WORLD: &str = "the secure world does not recognise that credential";
     const NO_WEAVER: &str = "android.hardware.weaver.IWeaver/default is not running";
     const NOT_OPENED: &str = "the data partition did not open: ";
-    let told = |hans: &str, hant: &str| match lang {
-        Lang::Hans => Some(hans.to_string()),
-        Lang::Hant => Some(hant.to_string()),
-        Lang::En => None,
-    };
     if let Some(rest) = why.strip_prefix(ELEMENT) {
-        if let Some(rest) = rest.strip_prefix(HELD_OFF) {
-            if let Some(secs) = rest.strip_suffix(" seconds") {
-                if let Some(text) = told(&format!("安全元件不认这个密码，{secs} 秒后才能重试"), &format!("安全元件不認這個密碼，{secs} 秒後才能重試")) {
-                    return text;
-                }
-            }
-        } else if rest.is_empty() {
-            if let Some(text) = told("安全元件不认这个密码", "安全元件不認這個密碼") {
-                return text;
-            }
-        }
+        let held = rest.strip_prefix(HELD_OFF).and_then(|rest| rest.strip_suffix(" seconds"));
+        return match (lang, held) {
+            (Lang::Hans, Some(secs)) => format!("安全元件不认这个密码，{secs} 秒后才能重试"),
+            (Lang::Hant, Some(secs)) => format!("安全元件不認這個密碼，{secs} 秒後才能重試"),
+            (Lang::Hans, None) => "安全元件不认这个密码".to_string(),
+            (Lang::Hant, None) => "安全元件不認這個密碼".to_string(),
+            (Lang::En, _) => why.to_string(),
+        };
     }
     if why.starts_with(WORLD) {
-        if let Some(text) = told("系统不认这个密码", "系統不認這個密碼") {
-            return text;
-        }
+        return match lang {
+            Lang::Hans => "系统不认这个密码".to_string(),
+            Lang::Hant => "系統不認這個密碼".to_string(),
+            Lang::En => why.to_string(),
+        };
     }
     if why.starts_with(NO_WEAVER) {
-        if let Some(text) = told("手机的安全芯片服务没有启动，data 解不开", "手機的安全晶片服務沒有啟動，data 解不開") {
-            return text;
-        }
+        return match lang {
+            Lang::Hans => "手机的安全芯片服务没有启动，data 解不开".to_string(),
+            Lang::Hant => "手機的安全晶片服務沒有啟動，data 解不開".to_string(),
+            Lang::En => why.to_string(),
+        };
     }
     if let Some(rest) = why.strip_prefix(NOT_OPENED) {
-        if let Some(text) = told(&format!("data 分区没有打开：{rest}"), &format!("data 分割區沒有開啟：{rest}")) {
-            return text;
-        }
+        return match lang {
+            Lang::Hans => format!("data 分区没有打开：{rest}"),
+            Lang::Hant => format!("data 分割區沒有開啟：{rest}"),
+            Lang::En => why.to_string(),
+        };
     }
     why.to_string()
 }
