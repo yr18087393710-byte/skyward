@@ -123,9 +123,10 @@ groups = ["nfc", "system"]
 # The service the weaver asks the secure element's applets through. Android
 # keeps it in its framework, which a recovery runs none of: the installed
 # system answers it from com.android.se, a program of its own that only a
-# running framework starts. The recovery runs its own se_omapi instead, one
-# built to run here with init's seclabel, staged out of the persist
-# partition into the recovery's own root, where it can be given a mode.
+# running framework starts. This recovery carries its own se_omapi, built to
+# run here, laid in the recovery's tree with the libraries it asks for and
+# the description of the service it answers as, so that the image works on
+# the phone with nothing put there for it.
 #
 # It is started without being waited on. A program that registers nothing
 # would hold up every program after it for the whole ready timeout, and the
@@ -133,27 +134,21 @@ groups = ["nfc", "system"]
 # no service answers, and is started again, so it meets the service as soon
 # as the service is there.
 [[service]]
-path = "/vendor/bin/sh"
-args = ["-c", "mkdir -p /opt/se; d=/mnt/vendor/persist/se; [ -d $d ] || d=/persist/se; for f in se_omapi android.se.omapi-V1-ndk.so libQSEEComAPI.so; do if [ -f $d/$f ]; then cp -f $d/$f /opt/se/$f; fi; done; chmod 0755 /opt/se/se_omapi 2>/dev/null; true"]
+path = "/system/bin/se_omapi"
+# Its own copy of the interface's library comes first, in a folder of its
+# own: the installed system keeps one in /vendor/lib64 of another build, and
+# the weaver behind this asks for that one.
+libraries = ["/system/lib64/omapi", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+
+# The boot control: which slot the bootloader starts next, and the switch
+# that changes it. The slots page reads it, and an update sets its slot
+# through it. It is not waited on, since nothing behind it fails for it, and
+# the page asks again each time it is opened.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.boot-service.qti"
 libraries = ["/system/lib64", "/vendor/lib64"]
-oneshot = true
 user = "root"
 groups = ["root"]
-
-[[service]]
-path = "/opt/se/se_omapi"
-libraries = ["/opt/se", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
-# Named for the description the directory needs of it, not for waiting on
-# it: a program is waited on before the programs after it are started, and
-# the weaver must be started whether or not this one has registered yet.
-#
-# The directory turns away a service the recovery's own description does not
-# name, and the installed system carries none for this one: it keeps the
-# service in a program of its framework, which a description has no place
-# for. A description is written beside the program instead, and published
-# as the directory's own.
-registers = ["android.se.omapi.ISecureElementService/default"]
-description = "/mnt/vendor/persist/se/se_omapi.xml"
 
 # What the service directory holds once the two are given their moment,
 # written where the running system can read it: the next start is set by
