@@ -4,8 +4,11 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 
-/// Where GitHub answers which release of Skyward is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/kirklin/skyward/releases/latest";
+/// Where GitHub answers which release of Skyward is the newest. It is this
+/// build's own repository rather than the one it was forked from: the
+/// releases there carry the builds that keep this phone's recovery working,
+/// and the upstream one builds no image for it at all.
+pub const LATEST: &str = "https://api.github.com/repos/yr18087393710-byte/skyward/releases/latest";
 
 /// The version of GitHub's API the answer is read as.
 const API_VERSION: &str = "2022-11-28";
