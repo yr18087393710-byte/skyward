@@ -46,6 +46,52 @@ pub fn capacity(total: u64) -> String {
     }
 }
 
+/// What the secure world or the phone's secure element answered when what
+/// was entered did not open the data partition, in the page's language.
+/// Anything said here is known to be about a screen lock; anything else is
+/// given back as it came, since what it means is not known here.
+pub fn explain(lang: Lang, why: &str) -> String {
+    const ELEMENT: &str = "the secure element does not recognise that credential";
+    const HELD_OFF: &str = ", and holds off further tries for another ";
+    const WORLD: &str = "the secure world does not recognise that credential";
+    const NO_WEAVER: &str = "android.hardware.weaver.IWeaver/default is not running";
+    const NOT_OPENED: &str = "the data partition did not open: ";
+    let told = |hans: &str, hant: &str| match lang {
+        Lang::Hans => Some(hans.to_string()),
+        Lang::Hant => Some(hant.to_string()),
+        Lang::En => None,
+    };
+    if let Some(rest) = why.strip_prefix(ELEMENT) {
+        if let Some(rest) = rest.strip_prefix(HELD_OFF) {
+            if let Some(secs) = rest.strip_suffix(" seconds") {
+                if let Some(text) = told(&format!("安全元件不认这个密码，{secs} 秒后才能重试"), &format!("安全元件不認這個密碼，{secs} 秒後才能重試")) {
+                    return text;
+                }
+            }
+        } else if rest.is_empty() {
+            if let Some(text) = told("安全元件不认这个密码", "安全元件不認這個密碼") {
+                return text;
+            }
+        }
+    }
+    if why.starts_with(WORLD) {
+        if let Some(text) = told("系统不认这个密码", "系統不認這個密碼") {
+            return text;
+        }
+    }
+    if why.starts_with(NO_WEAVER) {
+        if let Some(text) = told("手机的安全芯片服务没有启动，data 解不开", "手機的安全晶片服務沒有啟動，data 解不開") {
+            return text;
+        }
+    }
+    if let Some(rest) = why.strip_prefix(NOT_OPENED) {
+        if let Some(text) = told(&format!("data 分区没有打开：{rest}"), &format!("data 分割區沒有開啟：{rest}")) {
+            return text;
+        }
+    }
+    why.to_string()
+}
+
 pub fn gb(bytes: u64) -> String {
     format!("{:.1}GB", bytes as f64 / 1e9)
 }

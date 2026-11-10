@@ -3290,6 +3290,7 @@ impl App {
 
     /// The data partition did not open, and why.
     pub fn data_failed(&mut self, why: String) {
+        let why = fmt::explain(self.state.lang, &why);
         self.state.data = Data::Failed(why);
         self.refresh();
     }
@@ -3301,6 +3302,7 @@ impl App {
             *checking = false;
         }
         self.refresh();
+        let why = fmt::explain(self.state.lang, &why);
         self.report(&why, now);
     }
 

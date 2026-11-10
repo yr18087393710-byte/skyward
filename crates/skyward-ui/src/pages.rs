@@ -164,6 +164,9 @@ const SETTINGS: Text = ["设置", "設定", "Settings"];
 const REBOOT: Text = ["重启", "重新啟動", "Reboot"];
 const ABOUT: Text = ["关于本机", "關於手機", "About phone"];
 const SPECS: Text = ["全部参数与信息", "全部規格與資訊", "All specs"];
+const CRYPT_STATE: Text = ["解密状态", "解密狀態", "Decryption"];
+const FREE_SPACE: Text = ["可用空间", "可用空間", "Free space"];
+const CHARGE_LEVEL: Text = ["电量", "電量", "Battery"];
 const LOGS: Text = ["导出日志", "匯出記錄", "Export logs"];
 const SCREEN_TIMEOUT: Text = ["息屏时间", "螢幕自動關閉", "Screen timeout"];
 const UPDATE: Text = ["系统更新", "系統更新", "System update"];
@@ -262,6 +265,21 @@ pub fn home(cx: &Ctx) -> Frame {
     out.push(Hit { rect: card.rows[0], action: Action::Open(Screen::About) });
     out.extend(card.rows[1..].iter().zip(&opens).filter_map(|(&rect, open)| open.map(|action| Hit { rect, action })));
     y = card.bottom + t.m.card_gap;
+    // What the phone is doing right now, under its name: whether the data
+    // partition is open, the slot the bootloader starts, the room left on
+    // it, and how much charge it has. Each is left out where the phone does
+    // not say it, so the card holds only what is known.
+    let mut facts: Vec<(&str, String)> = vec![(l.pick(CRYPT_STATE), fmt::data(l, &cx.state.data).to_string())];
+    if let Some(slot) = i.slot {
+        facts.push((l.pick(CURRENT_SLOT), slot.letter().to_string()));
+    }
+    if let Some(free) = i.storage.free {
+        facts.push((l.pick(FREE_SPACE), fmt::gb(free)));
+    }
+    if let Some(b) = &i.battery {
+        facts.push((l.pick(CHARGE_LEVEL), fmt::level(l, b)));
+    }
+    y = widgets::info_card(&mut c, t, f, y, &facts) + t.m.card_gap;
     // On a phone whose WLAN the recovery brings up, the WLAN comes first
     // under the device, as on the stock settings home; with it, where the
     // phone can hold a second system, the two systems.
