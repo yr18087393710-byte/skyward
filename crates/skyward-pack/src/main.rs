@@ -135,6 +135,22 @@ fn main() -> Result<()> {
                 rd.add(paths::TASK_PROFILES, 0o644, TASK_PROFILES.to_vec())?;
             }
             rd.add(paths::MTP_RC, 0o644, MTP_RC.to_vec())?;
+            // A device's recovery carries files of its own beside its
+            // configuration, in a folder named for it: the programs it runs
+            // that the recovery does not build, the libraries they ask for,
+            // and the descriptions of the services they answer as. Each is
+            // laid at the path it takes inside the recovery, so the folder
+            // holds a tree of its own and the image needs nothing put on the
+            // phone for it to work.
+            let beside = config.with_extension("");
+            if beside.is_dir() {
+                for (path, data) in files_in(&beside)? {
+                    // A program is given the mode to run; a library and a
+                    // description are only read.
+                    let mode = if Path::new(&path).extension().is_none() { 0o755 } else { 0o644 };
+                    rd.add(&path, mode, data)?;
+                }
+            }
             // On an unlocked device adbd keeps root when ro.secure is 0 and
             // lets any computer in without authorization when ro.adb.secure is
             // 0; init lets a later line of a property file override an earlier
@@ -274,6 +290,29 @@ fn list(image: &Path) -> Result<()> {
     }
     println!("{} entries", rd.entries.len());
     Ok(())
+}
+
+/// Every regular file under `dir`, each with the path it is laid at inside
+/// the recovery: the folder's own name goes with none of them, so a folder
+/// holds a tree of the recovery's own. Written in one order, so that an
+/// image built twice from the same folder is the same image.
+fn files_in(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(at) = todo.pop() {
+        for entry in std::fs::read_dir(&at).with_context(|| format!("read {}", at.display()))? {
+            let path = entry.with_context(|| format!("read {}", at.display()))?.path();
+            if path.is_dir() {
+                todo.push(path);
+            } else if path.is_file() {
+                let under = path.strip_prefix(dir).expect("the file is under the folder");
+                let name = under.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
+                out.push((name, std::fs::read(&path).with_context(|| format!("read {}", path.display()))?));
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 #[cfg(test)]
