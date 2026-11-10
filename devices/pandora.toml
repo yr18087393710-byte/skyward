@@ -121,15 +121,16 @@ user = "system"
 groups = ["nfc", "system"]
 
 # The service the weaver asks the secure element's applets through. Android
-# keeps it in its framework, which a recovery runs none of, so the phone's
-# own program for it is taken from where the installed system keeps it and
-# run here: it answers as the OMAPI service over that secure element HAL.
-# Whichever copy is found is staged into the recovery's own root, where it
-# can be given a mode to run; nothing fails if none is, since the weaver
-# alone is what goes without.
+# keeps it in its framework, which a recovery runs none of. This phone's own
+# binary cannot serve: the installed system keeps that service in
+# com.android.se, a program of its own that only a running framework starts.
+# The recovery therefore carries its own se_omapi, built with init's
+# seclabel, staged from persist into the recovery's root, where it can be
+# given a mode to run. It answers as the OMAPI service over the secure
+# element HAL, as the phone's own init has it run.
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "mkdir -p /opt/se; for p in /mnt/system/system/bin/se_omapi /system/bin/se_omapi /persist/se_omapi /mnt/vendor/persist/se_omapi; do if [ -f $p ]; then cp $p /opt/se/se_omapi; chmod 0755 /opt/se/se_omapi; break; fi; done; true"]
+args = ["-c", "mkdir -p /opt/se; d=/mnt/vendor/persist/se; [ -d $d ] || d=/persist/se; for f in se_omapi android.se.omapi-V1-ndk.so libQSEEComAPI.so; do if [ -f $d/$f ]; then cp -f $d/$f /opt/se/$f; fi; done; chmod 0755 /opt/se/se_omapi 2>/dev/null; true"]
 libraries = ["/system/lib64", "/vendor/lib64"]
 oneshot = true
 user = "root"
