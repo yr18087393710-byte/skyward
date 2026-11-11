@@ -1,4 +1,4 @@
-use crate::backup;
+﻿use crate::backup;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
 use crate::haptics::Haptics;
@@ -2346,28 +2346,6 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     Effect::StopJob => worker.as_ref().context("there is no work on files to stop")?.stop(),
                     // Rules kept on a partition that is not mounted are the
                     // page's to report, with what to do first.
-                    // What the bootloader checks before it starts a slot is turned off, in
-                    // the slot the phone runs from, by the program that turns it
-                    // off for the installed system's own install scripts.
-                    Effect::DisableAvb => {
-                        let mut refused = Vec::new();
-                        for what in ["disable-verification", "disable-verity"] {
-                            match std::process::Command::new("/system/bin/avbctl").arg(what).output() {
-                                Ok(out) if out.status.success() => {}
-                                Ok(out) => refused.push(String::from_utf8_lossy(&out.stderr).trim().to_string()),
-                                Err(e) => refused.push(format!("{what}: {e}")),
-                            }
-                        }
-                        let said = match refused.is_empty() {
-                            true => app.state.lang.pick([
-                                "已关闭校验启动，切换槽位后需要再做一次。",
-                                "已關閉校驗啟動，切換槽位後需要再做一次。",
-                                "The bootloader's checks are off; the other slot is changed after a switch.",
-                            ]).to_string(),
-                            false => refused.join("；"),
-                        };
-                        app.report(&said, now);
-                    }
                     Effect::Relabel => {
                         ensure!(relabeler.is_none(), "relabeling is under way already");
                         let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;

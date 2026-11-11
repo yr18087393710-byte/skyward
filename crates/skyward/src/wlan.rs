@@ -34,6 +34,12 @@ const PARTITIONS: &str = "/skyward/wlan";
 /// recovery service's own folder.
 const HOME: &str = "/skyward/run/supplicant";
 
+/// Where the networks joined are kept: on the partition that outlasts a
+/// start, so that the next start joins them again without asking for their
+/// passwords. A phone that carries no such partition falls back to the
+/// recovery's own folder, which outlasts nothing.
+const SAVED: &str = "/mnt/vendor/persist/skyward/wpa_supplicant.conf";
+
 /// The user the supplicant takes on as it starts, who has to be able to
 /// make its socket.
 const WIFI: u32 = 1010;
@@ -403,7 +409,12 @@ impl Station {
         for c in supplicant::network_commands(id, &joined.ssid, joined.security, password, hidden)? {
             r.control.order(&c)?;
         }
-        r.control.order(&format!("SELECT_NETWORK {id}"))
+        r.control.order(&format!("SELECT_NETWORK {id}"))?;
+        // Kept where the next start finds it, so that this network is joined
+        // again without its password being asked for. Nothing fails over it:
+        // a phone that keeps its settings nowhere joins it for this run alone.
+        let _ = r.control.ask("SAVE_CONFIG");
+        Ok(())
     }
 
     /// Read what the supplicant has told.
@@ -715,10 +726,29 @@ fn start_supplicant(cfg: &Config, libraries: Option<&Path>) -> Result<Child> {
     fs::set_permissions(home, fs::Permissions::from_mode(0o755)).with_context(|| format!("open {} to the supplicant", home.display()))?;
     std::os::unix::fs::chown(&sockets, Some(WIFI), Some(WIFI)).with_context(|| format!("give {} to the supplicant", sockets.display()))?;
     fs::set_permissions(&sockets, fs::Permissions::from_mode(0o770)).with_context(|| format!("keep {} to the supplicant", sockets.display()))?;
-    let settings = home.join("wpa_supplicant.conf");
-    fs::write(&settings, format!("ctrl_interface={}\nupdate_config=0\np2p_disabled=1\npmf=1\nsae_pwe=2\n", sockets.display()))
-        .with_context(|| format!("write {}", settings.display()))?;
-    fs::set_permissions(&settings, fs::Permissions::from_mode(0o644)).with_context(|| format!("open {} to the supplicant", settings.display()))?;
+    // The settings are kept where the phone keeps what outlasts a start,
+    // so that the networks joined once are joined again without asking for
+    // their passwords. The supplicant adds to them as it goes, which is what
+    // `update_config` lets it do.
+    let saved = Path::new(SAVED);
+    let keeping = saved.parent().is_some_and(|dir| fs::create_dir_all(dir).is_ok());
+    // The supplicant keeps what it saves by writing a file of its own beside
+    // the settings and renaming it into place, so the folder has to be its
+    // own as well as the file.
+    if let Some(dir) = saved.parent().filter(|_| keeping) {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o770)).with_context(|| format!("open {} to the supplicant", dir.display()))?;
+        let _ = std::os::unix::fs::chown(dir, Some(WIFI), Some(WIFI));
+    }
+    let settings = match keeping {
+        true => saved.to_path_buf(),
+        false => home.join("wpa_supplicant.conf"),
+    };
+    if !settings.exists() {
+        fs::write(&settings, format!("ctrl_interface={}\nupdate_config=1\np2p_disabled=1\npmf=1\nsae_pwe=2\n", sockets.display()))
+            .with_context(|| format!("write {}", settings.display()))?;
+    }
+    fs::set_permissions(&settings, fs::Permissions::from_mode(0o660)).with_context(|| format!("open {} to the supplicant", settings.display()))?;
+    let _ = std::os::unix::fs::chown(&settings, Some(WIFI), Some(WIFI));
     let socket = sockets.join(&cfg.interface);
     // One an earlier run left would answer nothing.
     if socket.exists() {

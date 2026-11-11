@@ -86,7 +86,6 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::Editor => editor(cx),
         Screen::Terminal => terminal(cx),
         Screen::Relabel => relabel(cx),
-        Screen::Avb => avb(cx),
         Screen::Filesystems => filesystems(cx),
         Screen::Filesystem => filesystem(cx),
         Screen::PartWork => part_work(cx),
@@ -135,7 +134,6 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::RunScript => (INSTALL, true),
         Confirm::Merge => (["滑动以合并", "滑動以合併", "Slide to merge"], true),
         Confirm::Relabel => (["滑动以修复", "滑動以修復", "Slide to fix"], true),
-        Confirm::Avb => (["滑动以关闭校验", "滑動以關閉校驗", "Slide to turn the checks off"], true),
         Confirm::SwitchSystem => (["滑动以切换并重启", "滑動以切換並重新啟動", "Slide to switch and reboot"], false),
         Confirm::RemoveSystem => (["滑动以删除", "滑動以刪除", "Slide to remove"], true),
         Confirm::InstallSystem => (INSTALL, false),
@@ -2206,8 +2204,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Row::new(l.pick(FILES)).icon(BLUE, Icon::Folder),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
-        Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
-            Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
+        Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
         Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
         Row::new(l.pick(UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
     ]);
@@ -2215,7 +2212,6 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Files),
         Action::Open(Screen::Terminal),
         Action::Open(Screen::Relabel),
-            Action::Open(Screen::Avb),
         Action::Open(Screen::Filesystems),
         Action::Open(Screen::Logs),
         Action::Open(Screen::Update),
@@ -2223,33 +2219,6 @@ pub fn advanced(cx: &Ctx) -> Frame {
     Frame::new(t, c, out, l.pick(ADVANCED), top)
 }
 
-/// Turning off what the bootloader checks before it starts a slot: with the
-/// checks on, a slot whose vbmeta image was changed does not start.
-pub fn avb(cx: &Ctx) -> Frame {
-    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
-    let mut c = page(cx);
-    let mut out = Vec::new();
-    let top = t.m.content_top;
-    let title = l.pick(AVB);
-    let what = l.pick([
-        "关闭 bootloader 对启动内容的校验，改过 vbmeta 的槽位也能启动。只改当前槽位，切换槽位后需要再做一次。",
-        "關閉 bootloader 對啟動內容的校驗，改過 vbmeta 的槽位也能啟動。只改目前槽位，切換槽位後需要再做一次。",
-        "Turns off what the bootloader checks before it starts a slot, so that a slot whose vbmeta image was changed still starts. It changes the slot the phone runs from; the other slot is changed again after a switch.",
-    ]);
-    let y = widgets::paragraph(&mut c, t, f, top, what);
-    let note = l.pick([
-        "关闭后系统的完整性校验不再起作用，只在自己的手机上使用。",
-        "關閉後系統的完整性校驗不再起作用，只在自己的手機上使用。",
-        "The system's integrity checks no longer hold afterwards; use this on your own phone only.",
-    ]);
-    let y = widgets::footnote(&mut c, t, f, y, note);
-    let (label, danger) = confirm_label(Confirm::Avb, s);
-    let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
-    out.push(Hit { rect: track, action: Action::Confirm(Confirm::Avb) });
-    Frame::new(t, c, out, title, top)
-}
-
-const AVB: Text = ["校验启动", "校驗啟動", "Verified boot"];
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];
 const FILESYSTEMS: Text = ["文件系统", "檔案系統", "Filesystems"];
 const STOPPED: Text = ["已停止", "已停止", "Stopped"];

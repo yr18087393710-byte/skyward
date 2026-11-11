@@ -1,4 +1,4 @@
-use crate::app::Screen;
+﻿use crate::app::Screen;
 use crate::lang::{Lang, Text};
 
 /// A feature or partition the search finds, and the page it opens.
@@ -51,12 +51,6 @@ pub const ENTRIES: &[Entry] = &[
         ADVANCED,
         Screen::Relabel,
         &["xiufuselinuxshangxiawen", "xfsxw", "xiufu", "xf", "shangxiawen", "context", "restorecon", "label"],
-    ),
-    entry(
-        ["校验启动", "校驗啟動", "Verified boot"],
-        ADVANCED,
-        Screen::Avb,
-        &["xiaoyanqidong", "xyqd", "avb", "verity", "verification", "vbmeta", "jiaoyan"],
     ),
     entry(
         ["文件系统", "檔案系統", "Filesystems"],
