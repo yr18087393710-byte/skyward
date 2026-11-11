@@ -62,6 +62,9 @@ pub enum Screen {
     BackupJob,
     /// Tools for the experienced: files, a terminal, the logs.
     Advanced,
+    /// Turning off what the bootloader checks before it starts a slot, so
+    /// that a slot whose vbmeta image was changed still starts.
+    Avb,
     Files,
     /// One file, and what can be done with it.
     FileInfo,
@@ -868,6 +871,8 @@ pub enum Confirm {
     /// Give the data partition's files the SELinux labels the installed
     /// system's rules give them.
     Relabel,
+    /// Turn off what the bootloader checks before it starts a slot.
+    Avb,
     /// Do to the partition the filesystem page shows what it chose.
     Filesystem,
     /// Switch to the system picked on the systems page, and restart into
@@ -1986,6 +1991,9 @@ pub enum Effect {
     /// Have the bootloader start this slot next, telling how it went with
     /// [`App::slot_switched`].
     SetSlot(Slot),
+    /// Turn off what the bootloader checks before it starts a slot, in the
+    /// slot the phone runs from, telling how it went with [`App::report`].
+    DisableAvb,
     /// Read the systems for the systems page, telling them with
     /// [`App::set_systems`].
     ReadSystems,
@@ -6531,6 +6539,7 @@ impl App {
             },
             // The data partition is reached through its own key whether or
             // not it is open, but not while it is being opened or erased.
+            Confirm::Avb => fx.push(Effect::DisableAvb),
             Confirm::Filesystem => {
                 let row = self.fs_row().expect("the page of a partition shows one that was read");
                 let data = row.name == DATA_PARTITION;

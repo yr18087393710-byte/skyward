@@ -53,6 +53,12 @@ pub const ENTRIES: &[Entry] = &[
         &["xiufuselinuxshangxiawen", "xfsxw", "xiufu", "xf", "shangxiawen", "context", "restorecon", "label"],
     ),
     entry(
+        ["校验启动", "校驗啟動", "Verified boot"],
+        ADVANCED,
+        Screen::Avb,
+        &["xiaoyanqidong", "xyqd", "avb", "verity", "verification", "vbmeta", "jiaoyan"],
+    ),
+    entry(
         ["文件系统", "檔案系統", "Filesystems"],
         ADVANCED,
         Screen::Filesystems,
