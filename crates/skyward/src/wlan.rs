@@ -481,6 +481,13 @@ impl Station {
     }
 
     fn joining(&mut self, told: &Told) {
+        if self.state.joined.is_none() {
+            // The supplicant joins the network it was given before by
+            // itself, and that join is no join of this screen's own: it is
+            // taken up here, as the event that tells of it comes, so that
+            // an address is asked for as after a join of this screen's.
+            self.adopt();
+        }
         let Some(j) = &mut self.state.joined else { return };
         match j.on(told) {
             Next::Show => {}
