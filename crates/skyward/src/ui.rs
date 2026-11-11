@@ -862,6 +862,13 @@ fn forget_unlock() {
     let _ = std::fs::remove_file(SAVED_UNLOCK);
 }
 
+/// Whether a network was joined before, which is what tells the recovery to
+/// bring the WLAN up as it starts rather than when the page is opened.
+fn wlan_joined_before() -> bool {
+    std::fs::read_to_string(wlan::SAVED)
+        .is_ok_and(|conf| conf.lines().any(|line| line.starts_with("network={")))
+}
+
 /// Show what the data partition still keeps closed: the first user whose
 /// own files wait on a screen lock they set themselves, with the control
 /// that lock is answered with, or nothing. Users whose credential the phone
@@ -1390,9 +1397,12 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     }
     // The DNS servers the network joined gave, for looking names up.
     let servers: Servers = Arc::new(Mutex::new(Vec::new()));
-    // The WLAN, on a phone whose driver the recovery brings up; it starts
-    // off. Without the bundle of the vendor interface's libraries the
-    // supplicant does not start, and the WLAN page says why.
+    // The WLAN, on a phone whose driver the recovery brings up. A phone that
+    // joined a network before brings it up now, as the recovery starts, and
+    // not when the screen is opened for it: a network joined again takes as
+    // long as it takes, and that time is not the user's to wait for once the
+    // page is there. Without the bundle of the vendor interface's libraries
+    // the supplicant does not start, and the WLAN page says why.
     let wlan = match &cfg.wlan {
         Some(w) => {
             app.state.wlan = Some(Wlan::default());
@@ -1405,6 +1415,12 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
         }
         None => None,
     };
+    if let Some(w) = &wlan {
+        if wlan_joined_before() {
+            app.state.wlan = Some(Wlan { power: WlanPower::Starting, ..Wlan::default() });
+            w.send(wlan::Command::On);
+        }
+    }
     let mut scanned_at = Instant::now();
     app.state.update_server = cfg.update.is_some();
     // Asking the update server, and downloading the full package.

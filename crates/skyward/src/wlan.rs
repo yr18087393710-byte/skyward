@@ -38,7 +38,7 @@ const HOME: &str = "/skyward/run/supplicant";
 /// start, so that the next start joins them again without asking for their
 /// passwords. A phone that carries no such partition falls back to the
 /// recovery's own folder, which outlasts nothing.
-const SAVED: &str = "/mnt/vendor/persist/skyward/wpa_supplicant.conf";
+pub const SAVED: &str = "/mnt/vendor/persist/skyward/wpa_supplicant.conf";
 
 /// The user the supplicant takes on as it starts, who has to be able to
 /// make its socket.
