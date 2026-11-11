@@ -1,9 +1,10 @@
 name: Build
 
-# Every push is linted and tested, and the recovery is built for every
-# device in devices/, each image zipped. A tag starting with v publishes
-# those zips as a release, each shown as the phone it is for. Run by hand,
-# it can build for one device alone.
+# Every push is linted and tested, and the recovery is built for the phones
+# named in PUSH_DEVICES below, each image zipped: every device in devices/ is
+# too many to build on each change. A tag starting with v builds them all and
+# publishes the zips as a release, each shown as the phone it is for. Run by
+# hand, it can build for one device alone.
 on:
   push:
     branches: ["**"]
@@ -24,6 +25,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The phones a push builds for, by codename. Add one to have it built on
+  # every push; leave it out and that phone is built only by a tag or by hand.
+  PUSH_DEVICES: pandora
 
 jobs:
   check:
@@ -77,12 +81,17 @@ jobs:
       - id: list
         env:
           DEVICE: ${{ inputs.device }}
+          PUSH: ${{ env.PUSH_DEVICES }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           if [ -n "$DEVICE" ]; then
             test -f "devices/$DEVICE.toml"
             echo "devices=$(jq -nc --arg device "$DEVICE" '[$device]')" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$REF_TYPE" = "tag" ]; then
             echo "devices=$(basename -s .toml devices/*.toml | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+          else
+            for one in $PUSH; do test -f "devices/$one.toml"; done
+            echo "devices=$(echo $PUSH | tr ' ' '\n' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
           fi
 
   recovery:
