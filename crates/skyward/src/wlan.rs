@@ -338,12 +338,38 @@ impl Station {
                 self.running = Some(r);
                 self.state.power = Power::On;
                 self.command(Command::Scan);
+                self.adopt();
             }
             Err(e) => {
                 let _ = skyward_sys::kmsg(&format!("the WLAN did not come up: {e:#}"));
                 self.state.power = Power::Failed(format!("{e:#}"));
             }
         }
+    }
+
+    /// What the supplicant was on as it started. It joins the network it was
+    /// given before by itself, and that join is not one this screen asked
+    /// for, so nothing would follow it: the network is taken as the one
+    /// joined, and an address is asked for as it would be after a join of
+    /// this screen's own.
+    fn adopt(&mut self) {
+        if self.state.joined.is_some() {
+            return;
+        }
+        let Some(r) = &self.running else { return };
+        let Ok(status) = r.control.ask("STATUS") else { return };
+        let fields = supplicant::fields(&status);
+        if fields.get("wpa_state").copied() != Some("COMPLETED") {
+            return;
+        }
+        let Some(ssid) = fields.get("ssid").filter(|s| !s.is_empty()).map(|s| s.to_string()) else { return };
+        self.state.joined = Some(Joined {
+            ssid: ssid.as_bytes().to_vec(),
+            name: ssid,
+            security: Security::Psk,
+            stage: Stage::Joining,
+        });
+        self.ask_address();
     }
 
     fn start(&self) -> Result<Running> {

@@ -1,4 +1,4 @@
-﻿use crate::backup;
+use crate::backup;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
 use crate::haptics::Haptics;
@@ -829,12 +829,46 @@ fn log_mounted(mounted: &Opened) -> Result<()> {
     skyward_sys::kmsg(&format!("{} holds {} at {}", mounted.mapped.display(), mounted.filesystem, skyward_crypto::data::MOUNT))
 }
 
+/// Where the credential that opened a user's files is kept, so that the next
+/// start opens them without asking. It is the user's own screen lock, kept
+/// where the recovery keeps what outlasts a start: anyone who can start a
+/// recovery on this phone can read it, which is what keeping it means.
+const SAVED_UNLOCK: &str = "/mnt/vendor/persist/skyward/unlock";
+
+/// The credential kept from an earlier start, where one was kept.
+fn saved_unlock() -> Option<Vec<u8>> {
+    std::fs::read(SAVED_UNLOCK).ok().filter(|code| !code.is_empty())
+}
+
+/// Keep `code`, which opened the user's files, for the next start.
+fn keep_unlock(code: &[u8]) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::path::Path::new(SAVED_UNLOCK);
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::write(path, code) {
+        Ok(()) => {
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("the credential was not kept: {e:#}"));
+        }
+    }
+}
+
+/// Let go of the kept credential, which no longer opens the files.
+fn forget_unlock() {
+    let _ = std::fs::remove_file(SAVED_UNLOCK);
+}
+
 /// Show what the data partition still keeps closed: the first user whose
 /// own files wait on a screen lock they set themselves, with the control
 /// that lock is answered with, or nothing. Users whose credential the phone
 /// made up open behind the owner and are never asked; one that did not
-/// open goes to the kernel log with why.
-fn show_closed(app: &mut App, closed: &[Closed]) -> Result<()> {
+/// open goes to the kernel log with why. Where a credential was kept, it is
+/// tried at once, and `auto` says the attempt under way is that one.
+fn show_closed(app: &mut App, closed: &[Closed], decryptor: &mut Option<Decryptor>, auto: &mut bool) -> Result<()> {
     use skyward_crypto::user::Lock;
     skyward_sys::kmsg(&format!("the users whose own files are still closed: {:?}", closed.iter().map(|c| c.user).collect::<Vec<_>>()))?;
     for c in closed {
@@ -850,7 +884,16 @@ fn show_closed(app: &mut App, closed: &[Closed]) -> Result<()> {
         };
         (c.user, keys)
     });
+    let waiting_user = waiting.as_ref().map(|(user, _)| *user);
     app.data_waiting(waiting);
+    if let Some(user) = waiting_user {
+        if decryptor.is_none() {
+            if let Some(code) = saved_unlock() {
+                *auto = true;
+                *decryptor = Some(Decryptor::start(decrypt::Job::Unlock { closed: closed.to_vec(), user, credential: code })?);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1104,6 +1147,14 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
     // Opening the data partition, or a user's own files in it, under way,
     // and the users whose own files are still closed once it is open.
     let mut decryptor: Option<Decryptor> = None;
+    // Whether the attempt under way is one the phone started with the
+    // credential it kept, rather than one the user typed, so that a kept
+    // credential that no longer works is let go of instead of being tried
+    // again on every start.
+    let mut auto = false;
+    // What the user typed for the attempt under way, kept once it opens
+    // their files.
+    let mut entered: Option<Vec<u8>> = None;
     let mut closed: Vec<Closed> = Vec::new();
     let mut arriving = Some(Incoming::Arrived);
     // The mount page shows the partitions as they are when it opens and
@@ -1699,7 +1750,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                             log_mounted(mounted)?;
                         }
                         closed = opening.closed;
-                        show_closed(&mut app, &closed)?;
+                        show_closed(&mut app, &closed, &mut decryptor, &mut auto)?;
                     }
                     wipe::Event::Ended(outcome) => {
                         let said = outcome.as_ref().map_or_else(wipe::said, |_| "done".to_string());
@@ -2034,7 +2085,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                         log_mounted(mounted)?;
                     }
                     closed = opening.closed;
-                    show_closed(&mut app, &closed)?;
+                    show_closed(&mut app, &closed, &mut decryptor, &mut auto)?;
                 }
                 decrypt::Ended::Opened(Err(why)) => {
                     skyward_sys::kmsg(&format!("the data partition stays closed: {why}"))?;
@@ -2051,11 +2102,24 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     app.data_failed(why);
                 }
                 decrypt::Ended::Unlocked(Ok(still)) => {
+                    // What opened the files is kept, so that the next start
+                    // opens them without asking.
+                    if let Some(code) = entered.take() {
+                        keep_unlock(&code);
+                    }
+                    auto = false;
                     closed = still;
-                    show_closed(&mut app, &closed)?;
+                    show_closed(&mut app, &closed, &mut decryptor, &mut auto)?;
                 }
                 decrypt::Ended::Unlocked(Err(why)) => {
                     skyward_sys::kmsg(&format!("what was entered did not open the user's files: {why}"))?;
+                    // A kept credential the phone no longer accepts is let
+                    // go of, so that the user is asked instead next time.
+                    if auto {
+                        forget_unlock();
+                    }
+                    auto = false;
+                    entered = None;
                     app.unlock_failed(why, now);
                 }
             }
@@ -2299,7 +2363,13 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
                     }
                     Effect::Unlock { user, code } => {
                         ensure!(decryptor.is_none(), "the data partition is being opened already");
-                        let job = decrypt::Job::Unlock { closed: closed.clone(), user, credential: code.into_bytes() };
+                        let credential = code.into_bytes();
+                        // What the user typed is kept once it opens their
+                        // files; this attempt is theirs, not one the phone
+                        // made on its own.
+                        entered = Some(credential.clone());
+                        auto = false;
+                        let job = decrypt::Job::Unlock { closed: closed.clone(), user, credential };
                         decryptor = Some(Decryptor::start(job)?);
                     }
                     Effect::ReadDir(folder) => list(&mut app, folder)?,
