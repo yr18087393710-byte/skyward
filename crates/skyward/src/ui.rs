@@ -869,6 +869,31 @@ fn wlan_joined_before() -> bool {
         .is_ok_and(|conf| conf.lines().any(|line| line.starts_with("network={")))
 }
 
+/// Where the terminal finds the script that backs up and restores the apps
+/// the phone keeps in its system partitions.
+const APPS_AT: &str = "/system/bin/skyward-apps";
+
+/// Put that script where the terminal finds it, and mount the slot's own
+/// partitions read-only so that it can read the apps in them. A partition
+/// already mounted is left as it is.
+fn ready_apps() {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::write(APPS_AT, include_str!("apps.sh")) {
+        Ok(()) => {
+            let _ = std::fs::set_permissions(APPS_AT, std::fs::Permissions::from_mode(0o755));
+        }
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("the apps script was not written: {e:#}"));
+        }
+    }
+    let Ok(Some(slot)) = skyward_vab::current_slot() else { return };
+    for base in ["system", "system_ext", "product", "vendor"] {
+        if let Err(e) = skyward_vab::mount_one(slot, base) {
+            let _ = skyward_sys::kmsg(&format!("{base} is not mounted for the apps: {e:#}"));
+        }
+    }
+}
+
 /// Show what the data partition still keeps closed: the first user whose
 /// own files wait on a screen lock they set themselves, with the control
 /// that lock is answered with, or nothing. Users whose credential the phone
@@ -1421,6 +1446,7 @@ pub fn run(cfg: &DeviceConfig, font: &Path, mono: &Path, request: bcb::Request, 
             w.send(wlan::Command::On);
         }
     }
+    ready_apps();
     let mut scanned_at = Instant::now();
     app.state.update_server = cfg.update.is_some();
     // Asking the update server, and downloading the full package.
