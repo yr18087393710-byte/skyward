@@ -90,7 +90,7 @@ Skyward 是使用 Rust 编写的 recovery，从零开始编写。
 
 ### 🚧 施工中
 
-这些机型的镜像按照各自的原厂固件构建，还没有在真机上试过。屏幕、触摸、WLAN 和振动已经配置好，不会解密 data 分区。
+这些机型的镜像按照各自的原厂固件构建，还没有在真机上试过。屏幕、触摸、WLAN 和振动已经配置好。解密 data 分区所需的程序由 Skyward 在手机上从已安装系统的 init 脚本和服务描述中读出，每个机型的读取结果都用原厂固件核对过，这些程序在这些机型上的运行情况还没有验证。
 
 | 机型 | 代号 | 构建所用的系统版本 |
 | --- | --- | --- |
@@ -119,8 +119,8 @@ Skyward 是使用 Rust 编写的 recovery，从零开始编写。
 Skyward 需要已解锁的 bootloader。从 [Releases](https://github.com/kirklin/skyward/releases) 下载对应机型的 zip，每个文件都标有机型和代号，例如 Xiaomi 17 Ultra (nezha)。使用 `SHA256SUMS` 核对并解压之后，在手机处于 fastboot 模式的时候，把其中的镜像刷入当前运行槽位的 recovery 分区：
 
 ```sh
-unzip skyward-v0.2.0-nezha-OS4.0.4.0.XPACNXM.zip
-fastboot flash recovery skyward-v0.2.0-nezha-OS4.0.4.0.XPACNXM.img
+unzip skyward-v0.3.0-nezha-OS4.0.4.0.XPACNXM.zip
+fastboot flash recovery skyward-v0.3.0-nezha-OS4.0.4.0.XPACNXM.img
 fastboot reboot recovery
 ```
 

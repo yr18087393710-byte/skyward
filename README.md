@@ -95,8 +95,11 @@ read and set properties.
 ### 🚧 Under construction
 
 These images are built from each phone's stock firmware and have not been tried
-on the phone. They set up the screen, touch, Wi-Fi and vibration, and do not decrypt
-the data partition.
+on the phone. They set up the screen, touch, Wi-Fi and vibration. The programs that
+decrypting the data partition takes are read on the phone from the installed
+system's own init scripts and service descriptions; what is read has been checked
+against each model's stock firmware, and how those programs run on these models has
+not been verified.
 
 | Device | Codename | Built on |
 | --- | --- | --- |
@@ -129,8 +132,8 @@ phone's model and codename, such as Xiaomi 17 Ultra (nezha). Check it against
 the slot the phone runs from, with the phone in fastboot mode:
 
 ```sh
-unzip skyward-v0.2.0-nezha-OS4.0.4.0.XPACNXM.zip
-fastboot flash recovery skyward-v0.2.0-nezha-OS4.0.4.0.XPACNXM.img
+unzip skyward-v0.3.0-nezha-OS4.0.4.0.XPACNXM.zip
+fastboot flash recovery skyward-v0.3.0-nezha-OS4.0.4.0.XPACNXM.img
 fastboot reboot recovery
 ```
 
