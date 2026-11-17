@@ -825,6 +825,65 @@ impl App {
                     }
                 };
             }
+            // The apps page ticks one app, or every one, and works on those
+            // ticked; taking them off the phone is asked for first.
+            Action::AppsPick(i) => {
+                if let Some(Ok(rows)) = &self.state.apps
+                    && let Some(app) = rows.get(i)
+                {
+                    let label = app.label.clone();
+                    if !self.state.chosen_apps.remove(&label) {
+                        self.state.chosen_apps.insert(label);
+                    }
+                    self.refresh();
+                }
+            }
+            Action::AppsAll => {
+                let all: Vec<String> = match &self.state.apps {
+                    Some(Ok(rows)) => rows.iter().map(|a| a.label.clone()).collect(),
+                    _ => Vec::new(),
+                };
+                if !all.is_empty() && self.state.chosen_apps.len() == all.len() {
+                    self.state.chosen_apps.clear();
+                } else {
+                    self.state.chosen_apps.extend(all);
+                }
+                self.refresh();
+            }
+            Action::AppsBackUp | Action::AppsRestore => {
+                let task = match action {
+                    Action::AppsRestore => AppTask::Restore,
+                    _ => AppTask::BackUp,
+                };
+                let apps = ticked(&self.state);
+                match apps.is_empty() {
+                    true => self.say(l.pick(["先选择要处理的系统应用", "先選擇要處理的系統應用程式", "Pick the apps to work on first"]), now),
+                    // Putting back a copy that is not kept is turned down
+                    // here, in the user's words: nothing waits in the store to
+                    // be put back.
+                    false if task == AppTask::Restore && !any_kept(&self.state) => {
+                        self.say(l.pick(["所选的系统应用没有备份", "所選的系統應用程式沒有備份", "The apps picked have no copy kept"]), now)
+                    }
+                    false => {
+                        // The page turns to the work at once, and the runtime
+                        // tells how far it has come.
+                        let total = apps.len();
+                        self.state.apps_work = Some(AppsWork { task, done: 0, total });
+                        self.refresh();
+                        return vec![Effect::AppWork { task, apps }];
+                    }
+                }
+            }
+            Action::AskAppsRemove => {
+                let apps = ticked(&self.state);
+                match apps.is_empty() {
+                    true => self.say(l.pick(["先选择要删除的系统应用", "先選擇要刪除的系統應用程式", "Pick the apps to remove first"]), now),
+                    false => {
+                        self.state.asking_apps = true;
+                        self.refresh();
+                    }
+                }
+            }
             Action::Unavailable(text) => self.say(text, now),
         }
         Vec::new()
@@ -1123,6 +1182,16 @@ impl App {
                 if let Install::SystemChoosing(choice) = &self.state.install {
                     fx.push(Effect::InstallSystem { size: choice.sizes[choice.size] });
                     self.state.install = Install::Systeming { name: choice.name.clone(), stage: None };
+                    self.refresh();
+                }
+            }
+        Confirm::RemoveApps => {
+                let apps = ticked(&self.state);
+                if !apps.is_empty() {
+                    let total = apps.len();
+                    fx.push(Effect::AppWork { task: AppTask::Remove, apps });
+                    self.state.apps_work = Some(AppsWork { task: AppTask::Remove, done: 0, total });
+                    self.state.asking_apps = false;
                     self.refresh();
                 }
             }

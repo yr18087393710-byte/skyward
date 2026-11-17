@@ -3,12 +3,18 @@
 //!
 //! An app is a folder holding an apk; the recovery reads it after mounting the
 //! partition it lives in. A copy keeps the folder as it is, so putting it back
-//! is copying it back, and deleting one is moving it out of the way rather
-//! than losing it: it stays under [`TRASH`] until it is let go of.
+//! is copying it back, and taking one off the phone moves it out of the way
+//! rather than losing it: it stays under [`TRASH`] until it is let go of.
+//!
+//! The work runs on a thread of its own, so the screen goes on while a folder
+//! of some megabytes is copied, and tells the page how many are done.
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
+use skyward_ui::app::{AppTask, NewApp};
 use std::fs;
+use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Sender};
 
 /// Where copies of the apps go, from the top of internal storage.
 pub const STORE: &str = "/sdcard/Skyward/apps";
@@ -19,39 +25,80 @@ pub const TRASH: &str = "/sdcard/Skyward/apps/trash";
 /// The folders under a partition that hold apps.
 const KINDS: [&str; 2] = ["app", "priv-app"];
 
-/// One page of what a list shows.
-pub const PAGE: usize = 8;
+/// The partitions a phone keeps its apps in.
+const PARTITIONS: [&str; 4] = ["system", "system_ext", "product", "vendor"];
 
 /// An app the phone keeps.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct App {
-    /// What the row shows, such as `system/priv-app/Settings`.
+    /// What the page names it by, such as `system/priv-app/Settings`.
     pub label: String,
-    /// The partition it lives in, such as `system`.
-    pub partition: String,
+    /// Where it lives, such as `system/priv-app`.
+    pub place: String,
     /// Its own folder, in the mounted partition.
     pub dir: PathBuf,
-    /// The bytes it takes.
+    /// The bytes its folder takes.
     pub bytes: u64,
-    /// The picture it shows, where one was found in its apk.
-    pub icon: Option<Vec<u8>>,
+    /// A copy of it is kept in the store.
+    pub kept: bool,
 }
 
 impl App {
-    /// Where a copy of it is kept.
+    /// Where a copy of it is kept, the partition and the folder under it
+    /// keeping the places they had on the phone.
     pub fn copy(&self) -> PathBuf {
-        Path::new(STORE).join(&self.partition).join(&self.label[self.label.find('/').map_or(0, |at| at + 1)..])
+        Path::new(STORE).join(&self.place).join(self.folder())
     }
 
     /// Where it waits after being taken off the phone.
     pub fn held(&self) -> PathBuf {
-        Path::new(TRASH).join(&self.partition).join(&self.label[self.label.find('/').map_or(0, |at| at + 1)..])
+        Path::new(TRASH).join(&self.place).join(self.folder())
+    }
+
+    /// The name of its own folder.
+    fn folder(&self) -> &str {
+        self.label.rsplit('/').next().unwrap_or(&self.label)
     }
 }
 
+pub enum Task {
+    /// Read the apps, which the page does as it opens.
+    Read,
+    /// Do this to the apps named, one after another.
+    Work { task: AppTask, apps: Vec<String> },
+}
+
+pub enum Event {
+    /// The apps as read, with the png of each picture, or why they could not
+    /// be.
+    Read(Result<Vec<NewApp>, String>),
+    /// How far the work has come: which, how many done, of how many.
+    At(AppTask, usize, usize),
+    /// The work ended, having done this many of them, or did not and why.
+    Ended(AppTask, usize, Result<(), String>),
+}
+
+/// The partitions the phone keeps its apps in, mounted, and where each is
+/// mounted: only those that are mounted hold apps the recovery can read.
+fn roots() -> Result<Vec<(String, PathBuf)>> {
+    let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    let shown = skyward_vab::mounted_partitions(slot)?;
+    let mut out = Vec::new();
+    for base in skyward_vab::slot_bases(slot)? {
+        if !PARTITIONS.contains(&base.as_str()) {
+            continue;
+        }
+        let name = format!("{base}{}", slot.suffix());
+        if shown.iter().any(|m| m.partition == name) {
+            out.push((base.clone(), skyward_vab::mount_point(&base)));
+        }
+    }
+    Ok(out)
+}
+
 /// The apps in the partitions mounted at `roots`, each with the bytes it takes
-/// and the picture it shows.
-pub fn list(roots: &[(String, PathBuf)]) -> Result<Vec<App>> {
+/// and whether a copy of it is kept.
+fn scan(roots: &[(String, PathBuf)]) -> Result<Vec<App>> {
     let mut out = Vec::new();
     for (partition, root) in roots {
         for kind in KINDS {
@@ -62,20 +109,30 @@ pub fn list(roots: &[(String, PathBuf)]) -> Result<Vec<App>> {
                 if !dir.is_dir() {
                     continue;
                 }
-                let Ok(apk) = apk_in(&dir) else { continue };
-                let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                out.push(App {
-                    label: format!("{partition}/{kind}/{name}"),
-                    partition: partition.clone(),
-                    bytes: measure(&dir),
-                    icon: icon_in(&apk).ok().flatten(),
-                    dir,
-                });
+                let Some(name) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+                let place = format!("{partition}/{kind}");
+                let label = format!("{place}/{name}");
+                let kept = Path::new(STORE).join(&place).join(&name).is_dir();
+                out.push(App { label, place, dir, bytes: measure(&dir), kept });
             }
         }
     }
     out.sort_by(|a, b| a.label.cmp(&b.label));
     Ok(out)
+}
+
+/// The bytes under `dir`, counted.
+fn measure(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else { return 0 };
+    let mut total = 0;
+    for entry in entries.flatten() {
+        match entry.metadata() {
+            Ok(m) if m.is_dir() => total += measure(&entry.path()),
+            Ok(m) => total += m.len(),
+            Err(_) => {}
+        }
+    }
+    total
 }
 
 /// The apk in an app's folder, which is the one named after it where the
@@ -92,26 +149,12 @@ fn apk_in(dir: &Path) -> Result<PathBuf> {
     found.into_iter().next().with_context(|| format!("no apk in {}", dir.display()))
 }
 
-/// The bytes under `dir`, counted.
-fn measure(dir: &Path) -> u64 {
-    let Ok(entries) = fs::read_dir(dir) else { return 0 };
-    let mut total = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        match entry.metadata() {
-            Ok(m) if m.is_dir() => total += measure(&path),
-            Ok(m) => total += m.len(),
-            Err(_) => {}
-        }
-    }
-    total
-}
-
 /// The picture an apk shows: the largest `ic_launcher` png in it, which is the
 /// name an app's own icon is stored under.
-fn icon_in(apk: &Path) -> Result<Option<Vec<u8>>> {
-    let file = fs::File::open(apk).with_context(|| format!("open {}", apk.display()))?;
-    let mut zip = zip::ZipArchive::new(file).with_context(|| format!("read {}", apk.display()))?;
+fn icon_in(app: &App) -> Option<Vec<u8>> {
+    let apk = apk_in(&app.dir).ok()?;
+    let file = fs::File::open(&apk).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
     let mut best: Option<(u64, Vec<u8>)> = None;
     for i in 0..zip.len() {
         let Ok(mut entry) = zip.by_index(i) else { continue };
@@ -127,28 +170,41 @@ fn icon_in(apk: &Path) -> Result<Option<Vec<u8>>> {
             best = Some((bytes.len() as u64, bytes));
         }
     }
-    Ok(best.map(|(_, bytes)| bytes))
+    best.map(|(_, bytes)| bytes)
+}
+
+/// The apps as the page shows them, each with the png of its picture.
+fn read(roots: &[(String, PathBuf)]) -> Result<Vec<NewApp>> {
+    let apps = scan(roots)?;
+    Ok(apps
+        .into_iter()
+        .map(|a| NewApp {
+            icon: icon_in(&a),
+            label: a.label,
+            place: a.place,
+            bytes: a.bytes,
+            kept: a.kept,
+        })
+        .collect())
 }
 
 /// Copy the app's folder into the store, as it is.
-pub fn copy(app: &App) -> Result<PathBuf> {
-    let to = app.copy();
-    copy_tree(&app.dir, &to)?;
-    Ok(to)
+fn back_up(app: &App) -> Result<()> {
+    copy_tree(&app.dir, &app.copy())
 }
 
-/// Put the app's folder back where it was, from the store.
-pub fn restore(app: &App) -> Result<()> {
+/// Put the app's folder back where it was, from the store, where a copy of it
+/// is kept.
+fn put_back(app: &App) -> Result<()> {
     let from = app.copy();
+    ensure!(from.is_dir(), "{} holds no copy of {} to put back", STORE, app.label);
     copy_tree(&from, &app.dir)
 }
 
-/// Take the app off the phone, keeping it to be put back.
-pub fn remove(app: &App) -> Result<PathBuf> {
-    let to = app.held();
-    copy_tree(&app.dir, &to)?;
-    fs::remove_dir_all(&app.dir).with_context(|| format!("take away {}", app.dir.display()))?;
-    Ok(to)
+/// Take the app off the phone, keeping it in the trash to be put back.
+fn remove(app: &App) -> Result<()> {
+    copy_tree(&app.dir, &app.held())?;
+    fs::remove_dir_all(&app.dir).with_context(|| format!("take away {}", app.dir.display()))
 }
 
 /// Copy `from` to `to`, making `to` and the folders between as they are
@@ -172,4 +228,81 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Do `task` to the apps named, telling how many are done after each.
+fn work(task: AppTask, apps: &[&App], tell: &mut impl FnMut(Event)) -> (usize, Result<()>) {
+    let total = apps.len();
+    let mut done = 0;
+    for app in apps {
+        let one = match task {
+            AppTask::BackUp => back_up(app),
+            AppTask::Restore => put_back(app),
+            AppTask::Remove => remove(app),
+        };
+        if let Err(e) = one {
+            return (done, Err(e));
+        }
+        done += 1;
+        tell(Event::At(task, done, total));
+    }
+    (done, Ok(()))
+}
+
+/// The work on the apps, from a thread of its own.
+pub struct Worker {
+    /// The thread ends once it has no more tasks to take: this end goes
+    /// before the thread is waited for, being the field before it.
+    tasks: Sender<Task>,
+    /// The tasks sent and not yet ended.
+    pending: usize,
+    worker: skyward_sys::worker::Worker<Event>,
+}
+
+impl Worker {
+    pub fn start() -> Result<Worker> {
+        let (tasks, todo) = mpsc::channel::<Task>();
+        let worker = skyward_sys::worker::Worker::start("apps", move |tell| {
+            for task in todo {
+                let list = || read(&roots().unwrap_or_default()).map_err(|e| format!("{e:#}"));
+                match task {
+                    Task::Read => {}
+                    Task::Work { task, apps } => {
+                        let (done, ended) = match roots().and_then(|roots| scan(&roots)) {
+                            Ok(held) => {
+                                let picked: Vec<&App> = apps.iter().filter_map(|l| held.iter().find(|a| &a.label == l)).collect();
+                                work(task, &picked, &mut |event| tell.tell(event))
+                            }
+                            Err(e) => (0, Err(e)),
+                        };
+                        tell.tell(Event::Ended(task, done, ended.map_err(|e| format!("{e:#}"))));
+                    }
+                }
+                tell.tell(Event::Read(list()));
+            }
+        })?;
+        Ok(Worker { tasks, pending: 0, worker })
+    }
+
+    pub fn send(&mut self, task: Task) {
+        self.tasks.send(task).expect("the apps' worker takes tasks while the screen holds it");
+        self.pending += 1;
+    }
+
+    /// Readable while events wait.
+    pub fn fd(&self) -> RawFd {
+        self.worker.fd()
+    }
+
+    /// Whether a task is under way or waiting.
+    pub fn busy(&self) -> bool {
+        self.pending > 0
+    }
+
+    /// The events since the last call.
+    pub fn events(&mut self) -> Vec<Event> {
+        let events = self.worker.events();
+        self.pending -= events.iter().filter(|e| matches!(e, Event::Read(_))).count();
+        events
+    }
 }

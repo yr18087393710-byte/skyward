@@ -1263,6 +1263,8 @@ struct Pages<'a> {
     merger: Option<merge::Merger>,
     /// The second system's work, on a phone that can hold one.
     systems_worker: Option<systems::Worker>,
+    /// The work on the system apps, on a thread of its own, and their list.
+    apps_worker: Option<apps::Worker>,
     /// A switch the system asked for, under way; then the phone starts the
     /// system switched to.
     switch_asked: bool,
@@ -1518,6 +1520,7 @@ impl<'a> Pages<'a> {
             backuper: None,
             merger: None,
             systems_worker,
+            apps_worker: None,
             switch_asked: false,
             switched: false,
             // The same one the WLAN thread the bringing-up started fills.
@@ -1774,6 +1777,7 @@ impl<'a> Pages<'a> {
         self.backup_told(now);
         self.merge_told(now)?;
         self.systems_told(now)?;
+        self.apps_told(now);
         self.wlan_told()?;
         self.keep_settings(now)?;
         self.updates_told(now)?;
@@ -2016,6 +2020,9 @@ impl<'a> Pages<'a> {
         if let Some(s) = &self.systems_worker {
             fds.push(s.fd());
         }
+        if let Some(a) = &self.apps_worker {
+            fds.push(a.fd());
+        }
         fds.push(self.readings.fd());
         wait(&fds, timeout)
     }
@@ -2027,6 +2034,7 @@ impl<'a> Pages<'a> {
     /// USB port, whose adb and file transfer stay up.
     fn may_sleep(&self) -> Result<bool> {
         let systems_busy = self.systems_worker.as_ref().is_some_and(systems::Worker::busy);
+        let apps_busy = self.apps_worker.as_ref().is_some_and(apps::Worker::busy);
         let busy = self.installer.is_some()
             || self.eraser.is_some()
             || self.worker.is_some()
@@ -2039,7 +2047,8 @@ impl<'a> Pages<'a> {
             || self.downloader.is_some()
             || self.skyward_checker.is_some()
             || self.skyward_updater.is_some()
-            || systems_busy;
+            || systems_busy
+            || apps_busy;
         let joining = self.app.state.wlan.as_ref().and_then(|w| w.joined.as_ref()).is_some_and(|j| matches!(j.stage, Joining::Joining | Joining::Addressing));
         let running = match &self.shell {
             Some(sh) => !sh.waiting()?,
@@ -2369,6 +2378,19 @@ impl Pages<'_> {
             self.app.refresh();
         }
         Ok(())
+    }
+
+    /// What the work on the apps told: how far it has come, how it ended, and
+    /// the apps as they stand once a task ends, which every task ends with.
+    fn apps_told(&mut self, now: u64) {
+        let Some(worker) = &mut self.apps_worker else { return };
+        for ev in worker.events() {
+            match ev {
+                apps::Event::Read(read) => self.app.set_apps(read),
+                apps::Event::At(task, done, total) => self.app.apps_at(task, done, total),
+                apps::Event::Ended(task, done, ended) => self.app.apps_ended(task, done, ended, now),
+            }
+        }
     }
 
     /// What the work on the two systems told.
@@ -3051,6 +3073,13 @@ impl Pages<'_> {
             Effect::ReadSlots => self.app.set_boot_slots(read_slots()),
             Effect::SetSlot(slot) => self.app.slot_switched(set_slot(slot), now),
             Effect::ReadSystems => self.systems()?.send(systems::Task::Read),
+            // The apps' thread is started the first time the page asks for
+            // them, and kept for the work it is asked for after.
+            Effect::ReadApps => self.apps()?.send(apps::Task::Read),
+            Effect::AppWork { task, apps } => {
+                skyward_sys::kmsg(&format!("working on the system apps, as the page asked: {task:?}"))?;
+                self.apps()?.send(apps::Task::Work { task, apps });
+            }
             // An install still under way may yet write the boot
             // partitions; a switch waits for it.
             Effect::SwitchSystem(to) => {
@@ -3366,6 +3395,14 @@ impl Pages<'_> {
     /// system has.
     fn systems(&mut self) -> Result<&mut systems::Worker> {
         self.systems_worker.as_mut().context("this phone holds no second system")
+    }
+
+    /// The apps' thread, started the first time a page asks it for the apps.
+    fn apps(&mut self) -> Result<&mut apps::Worker> {
+        if self.apps_worker.is_none() {
+            self.apps_worker = Some(apps::Worker::start()?);
+        }
+        self.apps_worker.as_mut().context("the apps' thread did not start")
     }
 
     /// Whether an install may start: none runs, and file transfer has let

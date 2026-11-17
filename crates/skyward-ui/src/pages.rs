@@ -6,6 +6,7 @@ use crate::app::{
     BACKUP_PARTS, DATA_ERASED, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, SCREEN_OFF, TARGETS, TIME_ZONES, USB_DRIVE_UNREADABLE,
     USB_DRIVE_WANTED, WIPES, installs, starting,
 };
+use crate::app::{AppRow, ICON_DP as APP_ICON_DP};
 use crate::canvas::Canvas;
 use crate::color::Rgba;
 use crate::editor;
@@ -114,6 +115,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::WlanNetwork => wlan_network(cx),
         Screen::FilesOtg => files_otg(cx),
         Screen::WlanAdd => wlan_add(cx),
+        Screen::Apps => apps(cx),
     }
 }
 
@@ -144,6 +146,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::SwitchSystem => (["滑动以切换并重启", "滑動以切換並重新啟動", "Slide to switch and reboot"], false),
         Confirm::RemoveSystem => (["滑动以删除", "滑動以刪除", "Slide to remove"], true),
         Confirm::InstallSystem => (INSTALL, false),
+        Confirm::RemoveApps => (["滑动以移入回收站", "滑動以移入回收筒", "Slide to move to the trash"], true),
     };
     (s.lang.pick(label), danger)
 }
@@ -2529,6 +2532,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Row::new(l.pick(DECRYPT)).icon(BLUE, Icon::Lock).trail(Trail::Value(fmt::data(l, &cx.state.data))),
         Row::new(l.pick(["挂载", "掛載", "Mount"])).icon(SLATE, Icon::Mount),
         Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
+        Row::new(l.pick(APPS)).icon(BLUE, Icon::Gear),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
         Row::new(l.pick(SERVE)).icon(BLUE, Icon::Globe),
         Row::new(l.pick(FETCH)).icon(GREEN, Icon::Globe),
@@ -2542,6 +2546,7 @@ pub fn advanced(cx: &Ctx) -> Frame {
         Action::Open(Screen::Decrypt),
         Action::Open(Screen::Mount),
         Action::Open(Screen::Terminal),
+        Action::Open(Screen::Apps),
         Action::Open(Screen::Filesystems),
         Action::Open(Screen::Serve),
         Action::Open(Screen::Fetch),
@@ -3609,6 +3614,16 @@ pub fn row(screen: Screen, cx: &Ctx, i: usize, c: &mut Canvas) {
             let work = cx.state.part_work.as_ref().expect("the page of partition work shows work");
             widgets::output_row(c, cx.t, cx.f, &work.output, i)
         }
+        Screen::Apps => {
+            let apps = match &cx.state.apps {
+                Some(Ok(apps)) => apps,
+                _ => return,
+            };
+            if let Some(a) = apps.get(i) {
+                let chosen = cx.state.chosen_apps.contains(&a.label);
+                app_row(c, cx.t, cx.f, cx.state.lang, a, chosen);
+            }
+        }
         other => unreachable!("{other:?} draws no list row by row"),
     }
 }
@@ -4447,6 +4462,140 @@ pub fn unhandled(cx: &Ctx) -> Frame {
     let y = widgets::section(&mut c, t, f, y, l.pick(ACTIONS));
     afterwards(&mut c, t, f, l, y, true, &mut out);
     Frame { back: false, ..Frame::new(t, c, out, l.pick(["无法处理该请求", "無法處理這項要求", "Can't handle the request"]), top) }
+}
+
+/// The apps the phone keeps in its system partitions: what each one is, the
+/// picture it shows and the copy kept of it, ticked one by one to be backed
+/// up, put back or taken off the phone.
+pub fn apps(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let title = l.pick(APPS);
+    let top = t.m.content_top;
+    // Work on them under way: the page says what it is doing and how far it
+    // has come, and nothing else may be touched until it ends.
+    if let Some(work) = &s.apps_work {
+        let mut c = page(cx);
+        let (done, total) = (work.done, work.total);
+        let detail = tr!(
+            l,
+            "已完成 {done} 个，共 {total} 个",
+            "已完成 {done} 個，共 {total} 個",
+            "{done} of {total} done"
+        );
+        let y = widgets::progress_card(&mut c, t, f, top, work.task.doing(l), &detail, Some(work.level()));
+        let y = widgets::footnote(&mut c, t, f, y, l.pick(["完成前，请不要关机。", "完成前，請不要關機。", "Don't power off until it's done."]));
+        return Frame::new(t, fit(c, t, y), Vec::new(), title, top);
+    }
+    // Taking them off the phone is asked for, and a swipe does it: they are
+    // kept in the trash, and can be put back from there.
+    if s.asking_apps {
+        let mut c = long_page(cx);
+        let count = s.chosen_apps.len();
+        let what = tr!(
+            l,
+            "把所选的 {count} 个系统应用移到回收站？它们将从系统分区移走，并保留在内部存储的 Skyward/apps/trash 中，可以再放回来。",
+            "把所選的 {count} 個系統應用程式移到回收筒？它們將從系統分割區移走，並保留在內部儲存空間的 Skyward/apps/trash 中，可以再放回來。",
+            "Move the {count} apps picked to the trash? They leave the system partitions and are kept in Skyward/apps/trash on internal storage, where they can be put back from."
+        );
+        let y = widgets::paragraph(&mut c, t, f, top, &what);
+        let (label, danger) = confirm_label(Confirm::RemoveApps, s);
+        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+        let out = vec![Hit { rect: track, action: Action::Confirm(Confirm::RemoveApps) }];
+        return Frame::new(t, fit(c, t, track.y + track.h), out, title, top);
+    }
+    let mut c = page(cx);
+    // Over the list: how many the phone holds and how many are ticked, or why
+    // there are none to show.
+    let mut list_top = top;
+    match &s.apps {
+        Some(Ok(rows)) if !rows.is_empty() => {
+            let (total, count) = (rows.len(), s.chosen_apps.len());
+            let summary = tr!(
+                l,
+                "{total} 个系统应用，已选 {count} 个",
+                "{total} 個系統應用程式，已選 {count} 個",
+                "{total} system apps, {count} picked"
+            );
+            list_top = widgets::section_first(&mut c, t, f, top, &summary).round();
+        }
+        Some(Err(why)) => {
+            let list = widgets::list(&mut c, t, f, top, &[Row::new(l.pick(["无法读取系统应用", "無法讀取系統應用程式", "Couldn't read the system apps"])).trail(Trail::None)]);
+            widgets::footnote(&mut c, t, f, list.bottom, why);
+        }
+        Some(Ok(_)) => {
+            widgets::list(&mut c, t, f, top, &[Row::new(l.pick(["系统分区中没有应用", "系統分割區中沒有應用程式", "No apps in the system partitions"])).trail(Trail::None)]);
+        }
+        None => {
+            widgets::list(&mut c, t, f, top, &[Row::new(l.pick(["正在读取系统应用", "正在讀取系統應用程式", "Reading the system apps"])).trail(Trail::None)]);
+        }
+    }
+    // The list itself, its rows drawn as they scroll into view.
+    let rows = match &s.apps {
+        Some(Ok(apps)) if !apps.is_empty() => {
+            let h = t.m.dp(APP_ROW_DP).round();
+            let mut edges = Vec::with_capacity(apps.len() + 1);
+            let mut y = list_top;
+            edges.push(y);
+            for _ in apps {
+                y += h;
+                edges.push(y);
+            }
+            Some(Rows { edges, action: Some(Action::AppsPick) })
+        }
+        _ => None,
+    };
+    let (back_up, restore, remove) = (
+        l.pick(["备份", "備份", "Back up"]),
+        l.pick(["恢复", "還原", "Restore"]),
+        l.pick(["删除", "刪除", "Remove"]),
+    );
+    let (canvas, rects) = widgets::dock_bar_danger(t, f, t.pal.bg, &[back_up, restore, remove], Some(2));
+    let dock = Dock { canvas, hits: hits(&rects, &[Action::AppsBackUp, Action::AppsRestore, Action::AskAppsRemove]) };
+    Frame { rows, dock: Some(dock), ..Frame::new(t, c, Vec::new(), title, top) }
+}
+
+/// How tall a row of the apps page is, in dp.
+const APP_ROW_DP: f32 = 64.0;
+
+const APPS: Text = ["系统应用", "系統應用程式", "System apps"];
+
+/// Row `a` of the apps page: the picture it shows, what it is called, where it
+/// lives and the room it takes, and whether a copy of it is kept; a tick at the
+/// right while it is ticked.
+fn app_row(c: &mut Canvas, t: &Theme, f: &Fonts, l: Lang, a: &AppRow, chosen: bool) {
+    let m = &t.m;
+    c.clear(t.pal.card);
+    let (card_x, right) = (m.margin, m.w as f32 - m.margin);
+    let cy = c.h as f32 / 2.0;
+    let size = m.dp(APP_ICON_DP);
+    let (ix, iy) = (card_x + m.inner, cy - size / 2.0);
+    match &a.icon {
+        // Laid over the card as it is: what the png leaves clear is
+        // transparent, and the card shows through it.
+        Some(picture) => {
+            let mut small = Canvas::new(picture.size, picture.size);
+            small.data.copy_from_slice(&picture.rgba);
+            c.lay(&small, ix as i32, iy as i32, 1.0);
+        }
+        None => icons::tile(c, t, ix, iy, SLATE, Icon::Gear),
+    }
+    let tx = ix + size + m.dp(16.0);
+    // The name, and under it where the app lives and the room it takes, and
+    // whether a copy of it is kept.
+    let (tt, tb) = f.heading.ink(m.row_title_px);
+    let (st, sb) = f.body.ink(m.sub_px);
+    let block = (tb - tt) + m.sub_gap + (sb - st);
+    let ink_top = cy - block / 2.0;
+    let room = right - m.inner - m.dp(40.0) - tx;
+    c.text_top(&f.heading, a.name(), tx, ink_top, m.row_title_px, t.pal.text, Some(room));
+    let size_text = fmt::bytes(a.bytes);
+    let place = a.place.as_str();
+    let under = match a.kept {
+        true => tr!(l, "{place} · {size_text} · 已备份", "{place} · {size_text} · 已備份", "{place} · {size_text} · copy kept"),
+        false => format!("{place} · {size_text}"),
+    };
+    c.text_top(&f.body, &under, tx, ink_top + (tb - tt) + m.sub_gap, m.sub_px, t.pal.subtitle, Some(room));
+    widgets::check_circle(c, t, right - m.inner - m.dp(12.0), cy, chosen);
 }
 
 #[cfg(test)]

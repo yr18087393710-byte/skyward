@@ -102,6 +102,22 @@ impl App {
                 self.state.system_pick = None;
                 self.state.asking_delete = false;
             }
+            // Work on the apps cannot be cut short, and the apps ticked are
+            // put down as the page is left.
+            Screen::Apps => {
+                if self.state.apps_work.is_some() {
+                    self.say(l.pick(WAIT_OR_STOP), now);
+                    return fx;
+                }
+                // The question put away first; going back again leaves the
+                // page.
+                if self.state.asking_apps {
+                    self.state.asking_apps = false;
+                    self.refresh();
+                    return fx;
+                }
+                self.state.chosen_apps.clear();
+            }
             Screen::Files => {
                 if let Some(up) = self.state.files.up() {
                     return vec![Effect::ReadDir(up)];
@@ -294,6 +310,7 @@ impl App {
             Screen::Filesystems => vec![Effect::ReadFilesystems],
             Screen::Slot | Screen::Reboot => vec![Effect::ReadSlots],
             Screen::Systems => vec![Effect::ReadSystems],
+            Screen::Apps => vec![Effect::ReadApps],
             Screen::Restore => vec![self.find_backups()],
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
             Screen::FilesOtg => vec![Effect::ReadOtg(self.state.otg.path.clone())],

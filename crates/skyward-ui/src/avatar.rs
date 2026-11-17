@@ -32,7 +32,7 @@ impl Avatar {
         let bytes = std::fs::read(path).with_context(|| format!("open {}", path.display()))?;
         let (pixels, w, h, channels) = match bytes.as_slice() {
             [0xFF, 0xD8, ..] => jpeg(&bytes, path)?,
-            [0x89, b'P', b'N', b'G', ..] => png(&bytes, path)?,
+            [0x89, b'P', b'N', b'G', ..] => png_pixels(&bytes)?,
             _ => anyhow::bail!("{} is neither a JPEG nor a PNG", path.display()),
         };
         let rgba = cut(&pixels, w, h, channels, size);
@@ -40,28 +40,27 @@ impl Avatar {
     }
 }
 
-/// A PNG's pixels, normalized to eight bits a channel.
-fn png(bytes: &[u8], path: &Path) -> Result<(Vec<u8>, u32, u32, usize)> {
-    let _ = path;
-    {
-        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
-        // The phone's own picture is whatever it was saved as; the pages want
-        // RGBA and nothing else.
-        decoder.set_transformations(png::Transformations::normalize_to_color8());
-        let mut reader = decoder.read_info().with_context(|| format!("read {}", path.display()))?;
-        let mut buf = vec![0; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut buf).with_context(|| format!("read {}", path.display()))?;
-        let (w, h) = (info.width, info.height);
-        ensure!(w > 0 && h > 0, "{} is a picture of no size", path.display());
-        let channels = match info.color_type {
-            png::ColorType::Rgba => 4,
-            png::ColorType::Rgb => 3,
-            png::ColorType::GrayscaleAlpha => 2,
-            png::ColorType::Grayscale => 1,
-            other => anyhow::bail!("{} is a picture of {other:?}, which a page cannot show", path.display()),
-        };
-        Ok((buf, w, h, channels))
-    }
+/// A PNG's pixels, normalized to eight bits a channel, and how many channels
+/// a pixel has: RGBA, RGB, grey with its alpha, or grey.
+///
+/// The phone's own picture is whatever it was saved as; the pages want pixels
+/// of eight bits a channel and nothing else, and so does an app's icon.
+pub(crate) fn png_pixels(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32, usize)> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().context("read a png")?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).context("read a png")?;
+    let (w, h) = (info.width, info.height);
+    ensure!(w > 0 && h > 0, "a picture of no size");
+    let channels = match info.color_type {
+        png::ColorType::Rgba => 4,
+        png::ColorType::Rgb => 3,
+        png::ColorType::GrayscaleAlpha => 2,
+        png::ColorType::Grayscale => 1,
+        other => anyhow::bail!("a picture of {other:?}, which a page cannot show"),
+    };
+    Ok((buf, w, h, channels))
 }
 
 /// A JPEG's pixels, as three channels.

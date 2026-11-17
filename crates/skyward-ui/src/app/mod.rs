@@ -34,6 +34,7 @@ use skyward_systems::{Overview, Who};
 use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 
 mod act;
+mod apps;
 mod backup;
 mod decrypt;
 mod draw;
@@ -61,6 +62,7 @@ mod update;
 mod wipe;
 mod wlan;
 
+pub use apps::*;
 pub use backup::*;
 pub use decrypt::*;
 pub use entry::*;
@@ -197,6 +199,9 @@ pub enum Screen {
     /// A network added by hand: its name, how it is protected and its
     /// password, typed on the screen's keyboard.
     WlanAdd,
+    /// The apps the phone keeps in its system partitions, the copies kept of
+    /// them, and the work on the ones ticked.
+    Apps,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +244,9 @@ pub enum Confirm {
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
     InstallSystem,
+    /// Take the apps ticked on the apps page off the phone, keeping them in
+    /// the trash.
+    RemoveApps,
 }
 
 /// What a control does when touched.
@@ -439,6 +447,15 @@ pub enum Action {
     StopSkywardUpdate,
     /// A control whose work is not wired up yet; touching it says so.
     Unavailable(&'static str),
+    /// Tick or untick the app at this place in the list the apps page shows.
+    AppsPick(usize),
+    /// Tick every app the list shows, or untick them all.
+    AppsAll,
+    /// Back up the apps ticked, or put them back.
+    AppsBackUp,
+    AppsRestore,
+    /// Ask to take the apps ticked off the phone; a swipe then does it.
+    AskAppsRemove,
 }
 
 /// One finger, in screen pixels.
@@ -666,6 +683,13 @@ pub enum Effect {
     /// Merge the update that waits in the slot the phone runs from,
     /// telling how it goes with [`App::set_update`].
     Merge,
+    /// Read the apps the phone keeps in its system partitions, telling them
+    /// with [`App::set_apps`].
+    ReadApps,
+    /// Back up the apps named, put them back from the store, or take them off
+    /// the phone, telling how it goes with [`App::apps_at`] and
+    /// [`App::apps_ended`].
+    AppWork { task: AppTask, apps: Vec<String> },
 }
 
 enum Drag {

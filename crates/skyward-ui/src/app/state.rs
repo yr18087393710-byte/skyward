@@ -126,6 +126,16 @@ pub struct State {
     /// Why the second system's start stopped, as its first program told
     /// it, which the systems page shows.
     pub system_notice: Option<String>,
+    /// The apps the phone keeps in its system partitions, as the runtime last
+    /// read them, or why it could not; none until it has.
+    pub apps: Option<Result<Vec<AppRow>, String>>,
+    /// The apps ticked on that page, by the label the page names them by.
+    pub chosen_apps: std::collections::BTreeSet<String>,
+    /// Work on the apps under way.
+    pub apps_work: Option<AppsWork>,
+    /// Taking the apps ticked off the phone was asked for; a swipe confirms
+    /// it.
+    pub asking_apps: bool,
     /// Where the data partition stands, and what is typed at the screen
     /// lock its users' own files wait on.
     pub data: Data,
@@ -314,6 +324,10 @@ impl Default for State {
             system_pick: None,
             systems_work: None,
             system_notice: None,
+            apps: None,
+            chosen_apps: std::collections::BTreeSet::new(),
+            apps_work: None,
+            asking_apps: false,
             data: Data::Closed,
             data_phase: 0.0,
             prepared: false,
