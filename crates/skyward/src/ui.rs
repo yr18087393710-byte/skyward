@@ -2825,7 +2825,12 @@ impl Pages<'_> {
                 // secure world counts it against the user.
                 if !self.tried_remembered && !self.closed.is_empty() {
                     self.tried_remembered = true;
-                    if let (Some(credential), Some(first)) = (self.remembered.clone(), self.closed.first()) {
+                    // Read again here where none was found as the pages were
+                    // built: the partition a credential kept by an earlier
+                    // build lies on is mounted by then, and the one this build
+                    // writes to is not readable before that either.
+                    let kept = self.remembered.take().or_else(crate::remember::read);
+                    if let (Some(credential), Some(first)) = (kept, self.closed.first()) {
                         let user = first.user;
                         skyward_sys::kmsg(&format!("opening user {user}'s files with the screen lock kept from before"))?;
                         self.last_credential = Some(credential.clone());

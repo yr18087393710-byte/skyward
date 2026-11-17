@@ -255,15 +255,37 @@ impl Inputs {
                 self.buttons.push((path, dev));
             }
         }
-        if self.panel.is_some() || panels.is_empty() {
-            return Ok(());
+        // A panel named `_1` is not the touchscreen: a `_0` node seen after it
+        // takes its place, the old one let go of with its descriptor closed.
+        if self.panel.is_some() {
+            let not_the_panel = self.panel.as_ref().is_some_and(|p| p.dev.name().is_some_and(|n| n.ends_with("_1")));
+            let at = panels.iter().position(|(_, dev)| dev.name().is_some_and(|n| n.ends_with("_0")));
+            match (not_the_panel, at) {
+                (true, Some(k)) => {
+                    self.panel = None;
+                    let (path, dev) = panels.remove(k);
+                    return self.take_panel(path, dev);
+                }
+                _ => return Ok(()),
+            }
         }
         // The one named _0 first, and any other after it, by name.
-        panels.sort_by_key(|(path, dev)| {
-            let named = dev.name().unwrap_or("").to_string();
-            (!named.ends_with("_0"), named, path.clone())
-        });
-        let (path, dev) = panels.remove(0);
+        let (path, dev) = match panels.iter().position(|(_, dev)| dev.name().is_some_and(|n| n.ends_with("_0"))) {
+            Some(k) => panels.remove(k),
+            None => {
+                if panels.is_empty() {
+                    return Ok(());
+                }
+                panels.sort_by_key(|(path, dev)| (dev.name().unwrap_or("").to_string(), path.clone()));
+                panels.remove(0)
+            }
+        };
+        self.take_panel(path, dev)
+    }
+
+    /// Take `dev` as the panel, telling the touchscreen what the configuration
+    /// writes to it.
+    fn take_panel(&mut self, path: PathBuf, dev: RawDevice) -> Result<()> {
         self.wakeful.add(dev.as_raw_fd())?;
         self.panel = Some(Panel::new(path, dev)?);
         for w in &self.touch_writes {
