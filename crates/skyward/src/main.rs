@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "android")]
 mod apps;
+#[cfg(target_os = "android")]
 mod backup;
 mod remember;
 #[cfg(target_os = "android")]
@@ -91,6 +92,7 @@ enum Cmd {
         names: Vec<String>,
     },
     /// Run as the recovery service (what init starts as /system/bin/recovery).
+    #[cfg(target_os = "android")]
     Recovery,
     /// Reboot through init: system, recovery, fastboot, bootloader, edl, or
     /// off.
@@ -247,7 +249,14 @@ fn main() -> Result<()> {
     let started_as = std::env::args_os().next().unwrap_or_default();
     let name = Path::new(&started_as).file_name().unwrap_or_default();
     if name == "recovery" {
-        return recovery();
+        #[cfg(target_os = "android")]
+        {
+            return recovery();
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            anyhow::bail!("the recovery service runs on the phone, where init starts it");
+        }
     }
     // Install scripts run the commands linked to this binary by their names.
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -266,6 +275,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(target_os = "android")]
         Cmd::Recovery => recovery(),
         Cmd::Reboot { target } => {
             let p = Power::parse(&target).ok_or_else(|| anyhow!("unknown target {target:?}"))?;
@@ -525,28 +535,20 @@ fn load_modules(cfg: &DeviceConfig, names: &[String]) -> Result<Vec<PathBuf>> {
     skyward_modules::load(&dirs, names)
 }
 
-/// Start the recovery's own logd where it needs libraries of the installed
-/// system, make the phone's firmware reachable to its drivers, mount the
-/// partitions its own programs and drivers use where it mounts them, load
-/// the configured kernel modules, hand the files the phone's init hands
-/// over as it boots to their accounts, and start the phone's own programs,
-/// read from the partitions just mounted: on the 13 Ultra, the touchscreen
-/// driver and the touch processing. Of the programs the configuration
-/// names, only those this phone's build of the hardware runs are started.
-/// The programs that use the phone's keys come after them, as `found`
-/// among the phone's partitions: where what the partitions say could not
-/// be made out, the phone's devices are up before that is said.
-#[cfg(target_os = "android")]
 /// How long a page waits for the phone's own parts before it goes ahead.
+#[cfg(target_os = "android")]
 const PREPARE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
+#[cfg(target_os = "android")]
 struct Gate {
     done: std::sync::Mutex<bool>,
     cv: std::sync::Condvar,
 }
 
+#[cfg(target_os = "android")]
 static PREPARED: std::sync::OnceLock<Gate> = std::sync::OnceLock::new();
 
+#[cfg(target_os = "android")]
 fn gate() -> &'static Gate {
     PREPARED.get_or_init(|| Gate { done: std::sync::Mutex::new(false), cv: std::sync::Condvar::new() })
 }
@@ -555,24 +557,29 @@ fn gate() -> &'static Gate {
 /// warmed, rather than once the pages are built: the supplicant then scans and
 /// joins while the decrypt page is still being answered, as it did before the
 /// screen was brought up beside the phone's parts (2026-11-15).
+#[cfg(target_os = "android")]
 static WLAN: std::sync::OnceLock<std::sync::Mutex<Option<crate::wlan::Worker>>> = std::sync::OnceLock::new();
 
 /// The DNS servers the joined network gave, for looking names up: the WLAN
 /// thread started by the bringing-up fills it, and the pages look through the
 /// same one.
+#[cfg(target_os = "android")]
 pub(crate) fn servers() -> skyward_net::http::Servers {
     SERVERS.get_or_init(|| std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))).clone()
 }
 
+#[cfg(target_os = "android")]
 static SERVERS: std::sync::OnceLock<skyward_net::http::Servers> = std::sync::OnceLock::new();
 
 /// Take the WLAN's thread the bringing-up started, if it did.
+#[cfg(target_os = "android")]
 pub(crate) fn take_wlan() -> Option<crate::wlan::Worker> {
     WLAN.get().and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).take())
 }
 
 /// Say the phone's own parts are up, or that bringing them up failed: either
 /// way nothing is gained by waiting longer.
+#[cfg(target_os = "android")]
 fn mark_prepared() {
     skyward_ui::progress::reached(skyward_ui::progress::READY);
     let gate = gate();
@@ -583,6 +590,7 @@ fn mark_prepared() {
 /// Wait until the phone's own parts are up, and no longer than [`PREPARE_WAIT`]:
 /// a page that needs the partitions or the phone's services calls this first,
 /// so that the screen can be drawn before any of them are ready.
+#[cfg(target_os = "android")]
 pub(crate) fn wait_prepared() {
     let gate = gate();
     let done = gate.done.lock().unwrap_or_else(|e| e.into_inner());
@@ -592,10 +600,15 @@ pub(crate) fn wait_prepared() {
 }
 
 /// Whether the phone's own parts are up already, asked without waiting.
+#[cfg(target_os = "android")]
 pub(crate) fn prepared() -> bool {
     *gate().done.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The programs that use the phone's keys come after them, as `found` among
+/// the phone's partitions: where what the partitions say could not be made
+/// out, the phone's devices are up before that is said.
+#[cfg(target_os = "android")]
 fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Found>) -> Result<()> {
     let watched = std::time::Instant::now();
     let nodes = skyward_sys::ueventd::apply()?;
@@ -948,6 +961,9 @@ fn adopt_installed_version(props: &std::collections::HashMap<String, String>) ->
 /// goes on stays in misc until the work is done; any other is cleared at
 /// once, so that any reboot from here boots the system. Failures go to the
 /// kernel log and still end the process, which init then starts again.
+/// Run as the recovery service: what init starts as `/system/bin/recovery`,
+/// which brings the phone's parts up and puts the pages over them.
+#[cfg(target_os = "android")]
 fn recovery() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let run = || -> Result<()> {
