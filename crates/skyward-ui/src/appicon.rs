@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn a_picture_wider_than_it_is_tall_is_stretched_to_the_square() {
-        let out = fit(&vec![9u8; 10 * 4 * 3], 10, 4, 3, 4);
+        let out = fit(&[9u8; 10 * 4 * 3], 10, 4, 3, 4);
         assert_eq!(out.len(), 4 * 4 * 4);
         assert_eq!(&out[..4], &[9, 9, 9, 255], "a picture of three channels is opaque");
     }

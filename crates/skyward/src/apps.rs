@@ -78,20 +78,24 @@ pub enum Event {
     Ended(AppTask, usize, Result<(), String>),
 }
 
-/// The partitions the phone keeps its apps in, mounted, and where each is
-/// mounted: only those that are mounted hold apps the recovery can read.
+/// The partitions the phone keeps its apps in, and where each is mounted: the
+/// ones already up are read as they are, and the rest are mounted for the
+/// reading, since a start leaves nothing mounted that it did not need.
 fn roots() -> Result<Vec<(String, PathBuf)>> {
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
-    let shown = skyward_vab::mounted_partitions(slot)?;
     let mut out = Vec::new();
     for base in skyward_vab::slot_bases(slot)? {
         if !PARTITIONS.contains(&base.as_str()) {
             continue;
         }
-        let name = format!("{base}{}", slot.suffix());
-        if shown.iter().any(|m| m.partition == name) {
-            out.push((base.clone(), skyward_vab::mount_point(&base)));
+        let point = skyward_vab::mount_point(&base);
+        if !skyward_block::mount::is_mount_point(&point)? {
+            if let Err(e) = skyward_vab::mount_one(slot, &base) {
+                let _ = skyward_sys::kmsg(&format!("the {base} partition is not mounted for the apps: {e:#}"));
+                continue;
+            }
         }
+        out.push((base, point));
     }
     Ok(out)
 }
