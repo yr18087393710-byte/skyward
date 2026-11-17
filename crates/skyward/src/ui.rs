@@ -833,11 +833,24 @@ fn log_mounted(mounted: &Opened) -> Result<()> {
 /// start opens them without asking. It is the user's own screen lock, kept
 /// where the recovery keeps what outlasts a start: anyone who can start a
 /// recovery on this phone can read it, which is what keeping it means.
-const SAVED_UNLOCK: &str = "/mnt/vendor/persist/skyward/unlock";
+const SAVED_UNLOCK: &str = "/metadata/skyward/credential";
+
+/// Where the credential was kept by a build that wrote it beside the rest of
+/// what outlasts a start. /metadata is mounted as the recovery starts and
+/// that folder is not, so a credential kept there is looked for as well and
+/// moved across once it opens the files again.
+const SAVED_UNLOCK_OLD: &str = "/mnt/vendor/persist/skyward/unlock";
 
 /// The credential kept from an earlier start, where one was kept.
 fn saved_unlock() -> Option<Vec<u8>> {
-    std::fs::read(SAVED_UNLOCK).ok().filter(|code| !code.is_empty())
+    for path in [SAVED_UNLOCK, SAVED_UNLOCK_OLD] {
+        if let Ok(code) = std::fs::read(path) {
+            if !code.is_empty() {
+                return Some(code);
+            }
+        }
+    }
+    None
 }
 
 /// Keep `code`, which opened the user's files, for the next start.
@@ -850,6 +863,8 @@ fn keep_unlock(code: &[u8]) {
     match std::fs::write(path, code) {
         Ok(()) => {
             let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            // The copy an earlier build read is done with.
+            let _ = std::fs::remove_file(SAVED_UNLOCK_OLD);
         }
         Err(e) => {
             let _ = skyward_sys::kmsg(&format!("the credential was not kept: {e:#}"));
@@ -859,7 +874,9 @@ fn keep_unlock(code: &[u8]) {
 
 /// Let go of the kept credential, which no longer opens the files.
 fn forget_unlock() {
-    let _ = std::fs::remove_file(SAVED_UNLOCK);
+    for path in [SAVED_UNLOCK, SAVED_UNLOCK_OLD] {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Whether a network was joined before, which is what tells the recovery to
