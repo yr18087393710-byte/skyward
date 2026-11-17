@@ -1,0 +1,211 @@
+[device]
+codename = "byron"
+brand = "Xiaomi"
+model = "Xiaomi 17 Max"
+ab = true
+soc = { hans = "第五代骁龙®8至尊版移动平台", hant = "Snapdragon® 8 Elite Gen 5 行動平台", en = "Snapdragon® 8 Elite Gen 5 Mobile Platform" }
+os_version_prop = "ro.mi.os.version.incremental"
+
+[display]
+# persist.sys.miui_resolution in the odm partition's build.prop, which is
+# the byron panel's own mode in the device tree.
+width = 1200
+height = 2608
+density = 480
+
+[modules]
+sources = ["vendor_boot", "vendor_dlkm", "vendor", "system_dlkm"]
+# The touchscreen: Synaptics TouchComm over SPI behind Xiaomi's touch
+# layer, the one touch driver the phone's own modules.load lists.
+load = ["synaptics_tcm2"]
+
+# As on the 17 Ultra, no init script of the phone's starts touch_report:
+# the touch feature service turns the controller's raw frames into
+# touches with /odm/lib64/libtouchreport.so, and a recovery runs none of
+# it. Told through Xiaomi's touch layer, the driver has the controller
+# report positions itself; that is known of the 17 Ultra's Synaptics
+# controller and not yet tried on this phone's.
+[touch]
+writes = [{ path = "/sys/class/touch/touch_dev/enable_touch_raw", value = "0" }]
+
+# The firmware of the WLAN chip is on the modem partition, which the phone
+# mounts at /vendor/firmware_mnt and its own recovery leaves unmounted, as
+# the 17 Ultra's does.
+[firmware]
+partition = "modem"
+
+# The persist partition, which the phone mounts at /mnt/vendor/persist and
+# its own recovery leaves unmounted. The WLAN's MAC address is there.
+[partitions]
+mounted = ["persist"]
+
+# Its stock recovery leaves out libsysutils and libcap, which the
+# recovery's own logd loads, as the 17 Ultra's does.
+[logd]
+libraries = ["/mnt/system/system/lib64/libsysutils.so", "/mnt/system/system/lib64/libcap.so"]
+
+# What the phone's own init runs once the system has finished starting, as
+# kernel-post-boot in /vendor/etc/init/hw/init.qti.kernel.rc. The kernel
+# starts the CPU clusters on the performance governor, which holds them at
+# their highest clock; the script hands them to WALT, lets idle CPUs power
+# down and sets how the memory bus scales. Without it the CPUs stay at
+# their highest clock and voltage even while idle, and the phone slowly
+# heats up.
+[[service]]
+path = "/vendor/bin/sh"
+args = ["/vendor/bin/init.kernel.post_boot.sh"]
+libraries = ["/system/lib64", "/vendor/lib64"]
+oneshot = true
+user = "root"
+groups = ["root", "system", "wakelock", "graphics"]
+
+# WLAN: the peach node in the device tree, driven by qca_cld3_peach_v2, the
+# one Peach driver the phone's own modules.load lists, as on the 17 Ultra.
+# Its cfg80211 asks for rfkill, one of the kernel's own modules in
+# system_dlkm. The driver reads its settings and the MAC address through
+# the firmware loader, from links the vendor partition keeps in its own
+# firmware folder, into the vendor partition and into persist.
+# wpa_supplicant runs on the recovery's own libraries before the vendor
+# partition's, as on the 17 Ultra.
+[wlan]
+modules = ["rfkill", "qca_cld3_peach_v2"]
+writes = [{ path = "/sys/kernel/cnss/fs_ready", value = "1" }]
+interface = "wlan0"
+supplicant = "/vendor/bin/hw/wpa_supplicant"
+libraries = ["/system/lib64", "/vendor/lib64"]
+service = "android.hardware.wifi.supplicant.ISupplicant/default"
+probe = "http://connect.rom.miui.com/generate_204"
+
+# The update server the stock updater of the Chinese system asks.
+[update]
+server = "https://update.miui.com/updates/miotaV3.php"
+
+# The stock build the recovery is made on: the Chinese system's
+# OS3.0.310.0, whose full update package on the phone maker's own download
+# server holds the recovery partition the recovery is built on top of.
+# 自建基线：本机 OS4.0.3.0.XAFCNXM（Android 17）的恢复分区。package 指向本 fork 的
+# Release 资源（zip 内即 recovery.img）；拿到 Xiaomi 官方 ota_full 地址后可换回官方 URL，
+# 并把 build.yml 的取料步骤还原为 skyward-pack stock。
+[stock]
+version = "OS4.0.3.0.XAFCNXM"
+package = "https://github.com/north1952/skyward/releases/download/OS4.0.3.0.XAFCNXM/byron-ota_full-OS4.0.3.0.XAFCNXM-user-17.0-8a167311.zip"
+recovery = "8a167311d5c2c90f515ecb1f738154cd55159672a80fcf7fe56cedd214eb709a"
+
+# qcom-hv-haptics (qcom,hv-haptics in its dtbo), with the click made from
+# samples at the motor's resonant frequency as on the 17 Ultra. The
+# strengths are the 17 Ultra's, which were felt on that phone's motor.
+[haptics]
+resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
+strength = { lightest = 0.25, strongest = 0.75 }
+
+# 解密链：本机系统的 libdl_android.so 只是指向 /apex/... 的软链，recovery 不挂
+# APEX，所以把能解密的那份 recovery（YAPR）里的 weaver 与它依赖的库一起带进来，
+# 放在 /skyward 下，不覆盖 /system/lib64，免得影响其他进程。
+
+[[file]]
+path = "system/lib64/libdl_android.so"
+source = "devices/byron/files/system/lib64/libdl_android.so"
+
+[[file]]
+path = "system/lib64/libvndksupport.so"
+source = "devices/byron/files/system/lib64/libvndksupport.so"
+
+[[file]]
+path = "system/lib64/libapexsupport.so"
+source = "devices/byron/files/system/lib64/libapexsupport.so"
+
+[[file]]
+path = "skyward/lib64/libhardware.so"
+source = "devices/byron/files/system/lib64/libhardware.so"
+
+[[file]]
+path = "skyward/lib64/libbase.so"
+source = "devices/byron/files/system/lib64/libbase.so"
+
+[[file]]
+path = "skyward/lib64/libutils.so"
+source = "devices/byron/files/system/lib64/libutils.so"
+
+[[file]]
+path = "skyward/lib64/liblog.so"
+source = "devices/byron/files/system/lib64/liblog.so"
+
+[[file]]
+path = "skyward/lib64/libcutils.so"
+source = "devices/byron/files/system/lib64/libcutils.so"
+
+[[file]]
+path = "skyward/lib64/libbinder_ndk.so"
+source = "devices/byron/files/system/lib64/libbinder_ndk.so"
+
+[[file]]
+path = "skyward/lib64/libbinder.so"
+source = "devices/byron/files/system/lib64/libbinder.so"
+
+[[file]]
+path = "skyward/lib64/libhidlbase.so"
+source = "devices/byron/files/system/lib64/libhidlbase.so"
+
+[[file]]
+path = "skyward/lib64/libprocessgroup.so"
+source = "devices/byron/files/system/lib64/libprocessgroup.so"
+
+[[file]]
+path = "system/lib64/android.hardware.weaver-V2-ndk.so"
+source = "devices/byron/files/system/lib64/android.hardware.weaver-V2-ndk.so"
+
+[[file]]
+path = "system/lib64/android.se.omapi-V1-ndk.so"
+source = "devices/byron/files/system/lib64/android.se.omapi-V1-ndk.so"
+
+[[file]]
+path = "skyward/hw/weaver-nxp"
+source = "devices/byron/files/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+mode = 0o755
+
+[[file]]
+path = "skyward/se-qti.sh"
+source = "devices/byron/files/skyward/se-qti.sh"
+mode = 0o755
+
+[[file]]
+path = "skyward/weaver-nxp.sh"
+source = "devices/byron/files/skyward/weaver-nxp.sh"
+mode = 0o755
+
+[[file]]
+path = "skyward/hw/se-qti"
+source = "devices/byron/files/vendor/bin/hw/android.hardware.secure_element-service.qti"
+mode = 0o755
+[[file]]
+path = "system/lib64/libEseUtils.so"
+source = "devices/byron/files/vendor/lib64/hw/libEseUtils.so"
+[[file]]
+path = "system/lib64/libGPQeSE.so"
+source = "devices/byron/files/vendor/lib64/libGPQeSE.so"
+[[file]]
+path = "system/lib64/libQSEEComAPI.so"
+source = "devices/byron/files/vendor/lib64/libQSEEComAPI.so"
+[[file]]
+path = "system/lib64/libstnfc-streset.so"
+source = "devices/byron/files/vendor/lib64/libstnfc-streset.so"
+[[file]]
+path = "system/lib64/android.hardware.secure_element-V1-ndk.so"
+source = "devices/byron/files/vendor/lib64/android.hardware.secure_element-V1-ndk.so"
+[[file]]
+path = "system/lib64/android.hardware.secure_element@1.0.so"
+source = "devices/byron/files/vendor/lib64/android.hardware.secure_element@1.0.so"
+
+# 安全芯片 HAL 与 weaver：都从 /skyward 起，root 身份，库路径带恢复自带的清单，
+# 与能解密的 YAPR 恢复一致。HAL 先起，weaver 自己会等它。
+[[service]]
+path = "/system/bin/sh"
+args = ["/skyward/se-qti.sh"]
+user = "root"
+groups = ["nfc", "root"]
+
+[[service]]
+path = "/system/bin/sh"
+args = ["/skyward/weaver-nxp.sh"]
+user = "root"
+groups = ["root"]
