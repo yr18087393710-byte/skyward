@@ -113,7 +113,8 @@ fn scan(roots: &[(String, PathBuf)]) -> Result<Vec<App>> {
                 let place = format!("{partition}/{kind}");
                 let label = format!("{place}/{name}");
                 let kept = Path::new(STORE).join(&place).join(&name).is_dir();
-                out.push(App { label, place, dir, bytes: measure(&dir), kept });
+                let bytes = measure(&dir);
+                out.push(App { label, place, dir, bytes, kept });
             }
         }
     }
@@ -271,7 +272,9 @@ impl Worker {
                         let (done, ended) = match roots().and_then(|roots| scan(&roots)) {
                             Ok(held) => {
                                 let picked: Vec<&App> = apps.iter().filter_map(|l| held.iter().find(|a| &a.label == l)).collect();
-                                work(task, &picked, &mut |event| tell.tell(event))
+                                work(task, &picked, &mut |event| {
+                                    tell.tell(event);
+                                })
                             }
                             Err(e) => (0, Err(e)),
                         };

@@ -1,3 +1,4 @@
+use crate::apps;
 use crate::backup;
 use crate::decrypt::{self, Decryptor};
 use crate::filework;
