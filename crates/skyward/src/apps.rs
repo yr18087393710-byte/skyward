@@ -80,22 +80,30 @@ pub enum Event {
 
 /// The partitions the phone keeps its apps in, and where each is mounted: the
 /// ones already up are read as they are, and the rest are mounted for the
-/// reading, since a start leaves nothing mounted that it did not need.
+/// reading, the way the recovery's own mount command mounts them, since a
+/// start leaves nothing mounted that it did not need.
 fn roots() -> Result<Vec<(String, PathBuf)>> {
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    // The partitions are mounted as the recovery's own mount command mounts
+    // them: one already mapped but not mounted is mounted, where asking for it
+    // by name would try to map it again and find the device busy.
+    let mounted = match skyward_vab::mount_partitions(slot) {
+        Ok(mounts) => mounts.partitions,
+        Err(e) => {
+            let _ = skyward_sys::kmsg(&format!("the system partitions are not mounted for the apps: {e:#}"));
+            Vec::new()
+        }
+    };
+    let suffix = slot.suffix();
     let mut out = Vec::new();
-    for base in skyward_vab::slot_bases(slot)? {
-        if !PARTITIONS.contains(&base.as_str()) {
-            continue;
+    for m in mounted {
+        let base = match m.partition.strip_suffix(suffix) {
+            Some(base) => base.to_string(),
+            None => m.partition.clone(),
+        };
+        if PARTITIONS.contains(&base.as_str()) {
+            out.push((base, m.mount_point));
         }
-        let point = skyward_vab::mount_point(&base);
-        if !skyward_block::mount::is_mount_point(&point)? {
-            if let Err(e) = skyward_vab::mount_one(slot, &base) {
-                let _ = skyward_sys::kmsg(&format!("the {base} partition is not mounted for the apps: {e:#}"));
-                continue;
-            }
-        }
-        out.push((base, point));
     }
     Ok(out)
 }
