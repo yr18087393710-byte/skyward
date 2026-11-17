@@ -133,8 +133,7 @@ fn brief(body: Option<&str>) -> Vec<String> {
         Some(at) => &body[..at],
         None => body,
     };
-    let lines = both(head, body);
-    lines
+    both(head, body)
 }
 
 /// The points written at the head of `head`, or those of `body` where the head
