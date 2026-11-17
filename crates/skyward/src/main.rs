@@ -667,7 +667,11 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
         steps
             .into_iter()
             .filter(|step| match step {
-                skyward_programs::secure::Step::ServeElements => false,
+                // The recovery serves Android's secure element service itself,
+                // the phone's own program for it ending as it starts here: the
+                // weaver that reaches its secure element through it needs the
+                // service, and nothing else serves it in a recovery.
+                skyward_programs::secure::Step::ServeElements => true,
                 skyward_programs::secure::Step::Start(program) => {
                     let serves = program
                         .service

@@ -225,11 +225,18 @@ impl Inputs {
         Ok(inputs)
     }
 
-    /// Take in the devices under /dev/input not seen before: the first
-    /// direct multitouch device as the panel, and every device with a
-    /// power, volume or back key as buttons. A panel taken in is told what
-    /// the device description writes to the touchscreen.
+    /// Take in the devices under /dev/input not seen before: one direct
+    /// multitouch device as the panel, and every device with a power, volume
+    /// or back key as buttons. A panel taken in is told what the device
+    /// description writes to the touchscreen.
+    ///
+    /// The phone's touch layer describes two direct multitouch devices, and
+    /// only the one whose name ends in `_0` is the touchscreen: the other
+    /// reports no finger at all, and a panel taken in as the first of the two
+    /// to be seen leaves the screen unanswering to a finger. So the devices
+    /// are gathered first and the one named `_0` is taken where there is one.
     fn scan(&mut self) -> Result<()> {
+        let mut panels: Vec<(PathBuf, RawDevice)> = Vec::new();
         for (path, dev) in evdev::raw_stream::enumerate() {
             if !self.seen.insert(path.clone()) {
                 continue;
@@ -240,18 +247,28 @@ impl Inputs {
                 .is_some_and(|a| a.contains(AbsoluteAxisCode::ABS_MT_POSITION_X) && a.contains(AbsoluteAxisCode::ABS_MT_POSITION_Y));
             let keys = dev.supported_keys().is_some_and(|k| KEYS.iter().any(|c| k.contains(*c)));
             eprintln!("input {}: {:?} direct={direct} multitouch={mt} keys={keys}", path.display(), dev.name().unwrap_or("?"));
-            if direct && mt && self.panel.is_none() {
-                self.wakeful.add(dev.as_raw_fd())?;
-                self.panel = Some(Panel::new(path, dev)?);
-                for w in &self.touch_writes {
-                    fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
-                    skyward_sys::kmsg(&format!("wrote {} to {} for the touchscreen", w.value, w.path))?;
-                }
+            if direct && mt {
+                panels.push((path, dev));
             } else if keys {
                 set_nonblocking(dev.as_raw_fd()).context("make buttons non-blocking")?;
                 self.wakeful.add(dev.as_raw_fd())?;
                 self.buttons.push((path, dev));
             }
+        }
+        if self.panel.is_some() || panels.is_empty() {
+            return Ok(());
+        }
+        // The one named _0 first, and any other after it, by name.
+        panels.sort_by_key(|(path, dev)| {
+            let named = dev.name().unwrap_or("").to_string();
+            (!named.ends_with("_0"), named, path.clone())
+        });
+        let (path, dev) = panels.remove(0);
+        self.wakeful.add(dev.as_raw_fd())?;
+        self.panel = Some(Panel::new(path, dev)?);
+        for w in &self.touch_writes {
+            fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
+            skyward_sys::kmsg(&format!("wrote {} to {} for the touchscreen", w.value, w.path))?;
         }
         Ok(())
     }

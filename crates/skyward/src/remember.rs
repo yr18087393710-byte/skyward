@@ -17,6 +17,11 @@ const METADATA: &str = "/metadata";
 /// Where it is kept: beside the recovery's own settings.
 pub const FILE: &str = "/metadata/skyward/credential";
 
+/// Where a build before this one kept it, on the persist partition, which the
+/// recovery mounts as it starts: a credential kept there still opens the
+/// files, and is moved to [`FILE`] once it does.
+pub const OLD_FILE: &str = "/mnt/vendor/persist/skyward/unlock";
+
 /// The screen lock kept from before, where one was kept.
 ///
 /// /metadata is not mounted yet when the pages are built -- the recovery mounts
@@ -33,7 +38,8 @@ pub fn read() -> Option<Vec<u8>> {
     if !mounted {
         let _ = skyward_block::mount::umount(at);
     }
-    kept
+    // The copy an earlier build kept on persist, where this one has none.
+    kept.or_else(|| std::fs::read(OLD_FILE).ok().filter(|kept| !kept.is_empty()))
 }
 
 /// Do `work` with the partition writable, and read-only again afterwards.
@@ -60,6 +66,8 @@ pub fn write(credential: &[u8]) -> Result<()> {
     std::fs::write(at, credential).with_context(|| format!("write {}", at.display()))?;
     std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o600))
         .with_context(|| format!("keep {} to root alone", at.display()))?;
+    // The copy an earlier build kept is done with, the files being open.
+    let _ = std::fs::remove_file(OLD_FILE);
     Ok(())
     })
 }
