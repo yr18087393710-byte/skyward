@@ -37,6 +37,14 @@ partition = "modem"
 [partitions]
 mounted = ["persist"]
 
+# The secure element service ends as it starts in a recovery: the devices that
+# wait for its registration wait on one that never comes, and the recovery
+# went on starting it and watching it end once a second for as long as it ran.
+# It is left out here, and the keys are reached through the note the
+# credential service guards instead, as on the 17 Ultra (2026-11-17).
+[keys]
+leave_out = ["android.hardware.secure_element."]
+
 # Its stock recovery leaves out libsysutils and libcap, which the
 # recovery's own logd loads, as the 17 Ultra's does.
 [logd]

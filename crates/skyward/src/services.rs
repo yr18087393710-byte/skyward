@@ -21,6 +21,17 @@ use std::time::{Duration, Instant};
 /// before it is started again.
 const RESTART_DELAY: Duration = Duration::from_secs(1);
 
+/// How many starts in a row a program gets when each ends as soon as it
+/// starts, before it is left as it ended. A program a recovery cannot run --
+/// the secure element service, which ends as it starts here -- would
+/// otherwise be started and end once a second for as long as the recovery
+/// runs, every end written to the kernel log.
+const QUICK_ENDS: u32 = 5;
+
+/// How long the thread of a program left as it ended waits, one wait after
+/// another, so that it is out of the way rather than ended.
+const LEFT_ASLEEP: Duration = Duration::from_secs(3600);
+
 /// How long a program gets to become what it says it will be.
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const READY_POLL: Duration = Duration::from_millis(100);
@@ -361,6 +372,9 @@ fn ready(s: &Service) -> Result<()> {
 }
 
 fn supervise(s: &Service, who: &Credentials, given: &Given) -> ! {
+    // How many starts in a row have ended at once; a start that lasts longer
+    // than the delay clears it.
+    let mut quick: u32 = 0;
     loop {
         let started = Instant::now();
         let ended = match running(&s.path) {
@@ -373,7 +387,21 @@ fn supervise(s: &Service, who: &Credentials, given: &Given) -> ! {
         };
         let _ = skyward_sys::kmsg(&line);
         if started.elapsed() < RESTART_DELAY {
+            quick += 1;
+            // Left as it ended: nothing starts it again, and the thread waits
+            // out of the way, as one of the recovery's own threads.
+            if quick >= QUICK_ENDS {
+                let _ = skyward_sys::kmsg(&format!(
+                    "{}: left as it ended, {quick} starts in a row having ended at once",
+                    s.path
+                ));
+                loop {
+                    thread::sleep(LEFT_ASLEEP);
+                }
+            }
             thread::sleep(RESTART_DELAY);
+        } else {
+            quick = 0;
         }
     }
 }
