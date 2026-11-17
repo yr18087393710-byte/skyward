@@ -37,14 +37,12 @@ partition = "modem"
 [partitions]
 mounted = ["persist"]
 
-# The secure element service ends as it starts in a recovery, and the weaver
-# reaches its secure element through that very service, so it ends at once
-# too: the recovery went on starting and watching both end once a second, and
-# waited twenty seconds of every start for a weaver that could never register.
-# Both are left out here, and the keys are reached through the note the
-# credential service guards instead, as on the 17 Ultra (2026-11-17).
-[keys]
-leave_out = ["android.hardware.secure_element.", "android.hardware.weaver."]
+# The secure element service is left as the phone's partitions name it, and
+# the weaver with it: the user's own files are opened through the weaver on
+# this phone, and the weaver reaches the secure element through that service,
+# so neither is left out. The service ends as it starts and is started again,
+# once a second, which the recovery writes to the kernel log and no more
+# (2026-11-17: leaving the two out left the screen lock opening nothing).
 
 # Its stock recovery leaves out libsysutils and libcap, which the
 # recovery's own logd loads, as the 17 Ultra's does.
