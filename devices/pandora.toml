@@ -181,3 +181,16 @@ libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64",
 ready_service = "android.hardware.secure_element.ISecureElement/eSE1"
 user = "system"
 groups = ["nfc", "system"]
+
+# The weaver: the phone's slots behind the screen lock, which the user's own
+# files are opened through. It reaches the secure element's applets through
+# the service above, so it runs after it. Its own libraries are the phone's
+# vendor ones, which reach back into /mnt/system for what a recovery carries
+# none of, and the path has to say so: started with only what its init file
+# names, it ends as it starts, every second.
+[[service]]
+path = "/odm/bin/hw/android.hardware.weaver-service.nxp-qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+ready_service = "android.hardware.weaver.IWeaver/default"
+user = "vendor_nxp_weaver"
+groups = ["vendor_nxp_weaver"]
