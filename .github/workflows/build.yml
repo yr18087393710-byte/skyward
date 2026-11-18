@@ -1,9 +1,9 @@
 name: Build
 
-# Every push is linted and tested, and the recovery is built for every
-# device in devices/, each image zipped. A tag starting with v publishes
-# those zips as a release, each shown as the phone it is for. Run by hand,
-# it can build for one device alone.
+# Every push is linted and tested, and the recovery is built for the phones in
+# DEVICES below, each image zipped. A tag starting with v publishes those zips
+# as a release, each shown as the phone it is for. Run by hand, it can build
+# for one device alone.
 on:
   push:
     branches: ["**"]
@@ -24,7 +24,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  PUSH_DEVICES: pandora
+  # The phones built on a push or a tag, by codename. Everything under devices/
+  # still describes its phone, so a codename put back here builds it again; one
+  # left out is not queued at all, which keeps the build of the phone that
+  # matters off the queue of the twenty it does not.
+  DEVICES: pandora
 
 jobs:
   # A release goes by its tag to whoever downloads it, and a build by the
@@ -105,6 +109,11 @@ jobs:
           if [ -n "$DEVICE" ]; then
             test -f "devices/$DEVICE.toml"
             echo "devices=$(jq -nc --arg device "$DEVICE" '[$device]')" >> "$GITHUB_OUTPUT"
+          elif [ -n "$DEVICES" ]; then
+            for device in $DEVICES; do
+              test -f "devices/$device.toml"
+            done
+            echo "devices=$(printf '%s\n' $DEVICES | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
           else
             echo "devices=$(basename -s .toml devices/*.toml | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
           fi
@@ -114,22 +123,16 @@ jobs:
     needs: [tools, devices]
     runs-on: ubuntu-24.04
     # A phone whose stock build cannot be fetched -- its package sits in
-    # another repository, which may hand it out no longer -- fails here and
-    # nowhere else: the release leaves that phone off and carries the rest,
-    # so the run is not red for a package this repository does not own.
+    # another repository, which may hand it out no longer -- may fail here
+    # without that making the run red: the release leaves that phone off and
+    # carries the rest. The list is DEVICES at the top, and a phone put back
+    # there is built again; this is only for one whose package is not ours.
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         device: ${{ fromJSON(needs.devices.outputs.devices) }}
         experimental: [false]
-        # `include` adds a combination rather than changing one, so the phone
-        # is taken out of the plain list first and put back the one way.
-        exclude:
-          - device: byron
-        include:
-          - device: byron
-            experimental: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -219,8 +222,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           zips=()
-          for config in devices/*.toml; do
-            device=$(basename "$config" .toml)
+          # The phones this run built, as DEVICES names them; everything under
+          # devices/ describes a phone, and only those built here have a zip.
+          for device in ${DEVICES:-$(basename -s .toml devices/*.toml)}; do
+            config="devices/$device.toml"
             model=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["device"]["model"])' "$config")
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip 2>/dev/null || true)
             if [ -z "$zip" ]; then
