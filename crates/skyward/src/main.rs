@@ -605,11 +605,6 @@ pub(crate) fn prepared() -> bool {
     *gate().done.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The interface the secure element service is registered under: a phone whose
-/// steps say the recovery serves it has no working program of its own for it in
-/// a recovery, and starting that one holds the keys back.
-const ELEMENT_SERVICE: &str = "android.hardware.secure_element.";
-
 /// The programs that use the phone's keys come after them, as `found` among
 /// the phone's partitions: where what the partitions say could not be made
 /// out, the phone's devices are up before that is said.
@@ -678,16 +673,6 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
                 // service, and nothing else serves it in a recovery.
                 skyward_programs::secure::Step::ServeElements => true,
                 skyward_programs::secure::Step::Start(program) => {
-                    // The phone's own service for the secure element cannot
-                    // register in a recovery, and waiting on it holds every key
-                    // program back twenty seconds, after which nothing starts
-                    // the weaver either. Where the recovery serves the secure
-                    // element itself, that program is left out.
-                    let element = program.service.ready_service.iter().any(|name| name.starts_with(ELEMENT_SERVICE));
-                    if served && element {
-                        left_out.push(format!("{} (the service the recovery serves itself)", program.service.path));
-                        return false;
-                    }
                     let serves = program
                         .service
                         .ready_service
