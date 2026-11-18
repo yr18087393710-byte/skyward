@@ -65,6 +65,35 @@ Modem、Network、Sim、Voice、UimRemote、Lpa 全部注册），然后**卡死
 TWRP 一类的 recovery 从来不做移动数据，原因不是做不到，而是没人愿意碰 RIL/QMI。我们这台
 有全部条件：分区能读、能起厂商进程、有完整的网络栈。
 
+## 2026-11-18 傍晚：根因抓到了（strace 证据）
+
+用户态这半边**已经打通**，卡的是**调制解调器本身**：
+
+```
+qcrilNrd 建 AF_QIPCRTR socket 后，向所有节点广播 QRTR 查询：
+  sendto(8, "\n\0\0\0\10\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20, 0,
+         {sa_family=AF_QIPCRTR, sa_data="\0\0\1\0\0\0\376\377\377\377"})   ← 0xFFFFFFFE = 广播
+没有任何 recvfrom 回答。
+```
+
+QRTR 查不到 = **modem 没在 QRTR 总线上出现**。旁证：`/dev/mhi*` 只有 `pipe_0`，
+`/sys/bus/mhi/devices/` 里 ADSP/IPCR 通道有名字但没有 up；内核只到「把
+`/firmware/image/peach/amss20.bin` 交给 mhi」这一步，之后没有 modem 的 boot 日志。
+
+同一个 binary 在 Android 里正常，所以不是程序的问题，是**这台机器在 recovery 启动路径下
+modem 没有被拉起来**。
+
+顺带查清的两件事：
+
+- `/dev/socket/ssgtzd` 是 QMI 客户端真正连的 socket（Android 里它有监听和多条连接），
+  已加进配置由 `ssgqmigd` 一起提供，`-3` 报错依旧，因为传输层本身没有 modem 回应
+- `libcom.android.tethering.connectivity_native.so`、`libandroid_net.so`、
+  `libnetd_client.so` 三个库必须带进恢复系统，否则 `nicmd`/`qms` 连启动都不行
+
+**下一步（独立工程）**：找 modem 在 Android 启动路径里是被谁拉起来的。候选：
+`rmtfs` 之类的文件服务、ABL/XBL 阶段的差异、或 `qmi_rmnet`/`mhi` 驱动的 boot 序列。
+判据很干脆：在恢复系统里让 QRTR 广播收到回答，`/dev/mhi*` 出现 IPCR/DUN 通道。
+
 ## 现有资产（不用重写）
 
 | 需要 | 现在有没有 |
