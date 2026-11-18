@@ -1005,10 +1005,6 @@ fn recovery() -> Result<()> {
             bcb::clear(&misc)?;
         }
         let cfg = DeviceConfig::load(Path::new("/").join(ramdisk::CONFIG))?;
-        // Whether the weaver's own slots are used is read here, before any page
-        // asks for the data partition to be opened.
-        let weaver_first = cfg.data.as_ref().is_some_and(|d| d.weaver_first);
-        skyward_crypto::data::use_weaver_first(weaver_first);
         skyward_sys::kmsg(&format!(
             "{} {} recovery up, misc command {:?} args {:?}, asking for {:?}",
             cfg.device.codename,
