@@ -113,10 +113,19 @@ jobs:
     name: Recovery for ${{ matrix.device }}
     needs: [tools, devices]
     runs-on: ubuntu-24.04
+    # A phone whose stock build cannot be fetched -- its package sits in
+    # another repository, which may hand it out no longer -- fails here and
+    # nowhere else: the release leaves that phone off and carries the rest,
+    # so the run is not red for a package this repository does not own.
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         device: ${{ fromJSON(needs.devices.outputs.devices) }}
+        experimental: [false]
+        include:
+          - device: byron
+            experimental: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
