@@ -605,6 +605,10 @@ pub(crate) fn prepared() -> bool {
     *gate().done.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The interface the weaver answers as, which the secure element service the
+/// recovery serves has to be up for before it starts.
+const WEAVER_SERVICE: &str = "android.hardware.weaver.IWeaver/default";
+
 /// The programs that use the phone's keys come after them, as `found` among
 /// the phone's partitions: where what the partitions say could not be made
 /// out, the phone's devices are up before that is said.
@@ -662,29 +666,32 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     // started as its partitions say.
     let cannot_run_here = cfg.keys.leave_out.clone();
     let served = found.as_deref().is_ok_and(keys::serves_elements);
+    // Whether the configuration lays the secure world out itself, the weaver
+    // among its programs: where it does, the recovery serves the secure element
+    // service in that order, before the weaver starts.
+    let serves_early = cfg.services.iter().any(|s| s.ready_service.as_deref() == Some(WEAVER_SERVICE));
     let mut left_out: Vec<String> = Vec::new();
     let found = found.map(|steps| {
         steps
             .into_iter()
             .filter_map(|step| match step {
                 // The recovery serves Android's secure element service itself,
-                // the phone's own program for it ending as it starts here: the
-                // weaver that reaches its secure element through it needs the
-                // service, and nothing else serves it in a recovery.
-                skyward_programs::secure::Step::ServeElements => Some(skyward_programs::secure::Step::ServeElements),
-                skyward_programs::secure::Step::Start(mut program) => {
-                    // The libraries a program of the secure world asks for are
-                    // not all named by the phone's own init file: they reach
-                    // back into /mnt/system for what a recovery carries none
-                    // of, and a program started with only what that file names
-                    // ends as it starts, every second, which holds the keys
-                    // back. Where the configuration names the same program, its
-                    // libraries are the ones it runs with; the order and the
-                    // waiting stay as the partitions say them.
-                    if let Some(known) = cfg.services.iter().find(|known| known.path == program.service.path) {
-                        if !known.libraries.is_empty() {
-                            program.service.libraries = known.libraries.clone();
-                        }
+                // in the order the configuration lays the secure world out --
+                // after the programs that register the elements and before the
+                // weaver that reaches them through it -- so the chain's own
+                // serving step is used only where the configuration does not.
+                skyward_programs::secure::Step::ServeElements => {
+                    (!serves_early).then_some(skyward_programs::secure::Step::ServeElements)
+                }
+                skyward_programs::secure::Step::Start(program) => {
+                    // A program the configuration names is started from the
+                    // configuration, the only place that says both the order
+                    // and the libraries it asks for: the phone's own init file
+                    // names too few of them, and a program started from it
+                    // alone ends as it starts, every second, which holds the
+                    // keys back.
+                    if cfg.services.iter().any(|known| known.path == program.service.path) {
+                        return None;
                     }
                     let serves = program
                         .service
@@ -809,22 +816,24 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     }
     skyward_ui::progress::reached(skyward_ui::progress::SERVICES);
     let starting = std::time::Instant::now();
-    // A program the phone's own chain starts is not started here as well: the
-    // chain knows the order the secure world's programs need -- the service the
-    // recovery serves among them, before the weaver that asks it -- and the
-    // configuration is what gave the chain their libraries.
-    let in_the_chain: Vec<String> = match found.as_ref() {
-        Ok(steps) => steps
-            .iter()
-            .filter_map(|step| match step {
-                skyward_programs::secure::Step::Start(program) => Some(program.service.path.clone()),
-                skyward_programs::secure::Step::ServeElements => None,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    let services: Vec<Started> = services.into_iter().filter(|s| !in_the_chain.contains(&s.service.path)).collect();
-    services::start(&services, libraries.as_deref())?;
+    // The secure element service is served here, between the programs that
+    // register the secure elements and the weaver that reaches them through
+    // it: that is the order the phone's own init has, and the weaver ends as
+    // it starts where nothing answers it.
+    let mut served_here = false;
+    for program in &services {
+        if serves_early && !served_here && program.service.ready_service.as_deref() == Some(WEAVER_SERVICE) {
+            let readers = skyward_omapi::start()?;
+            skyward_sys::kmsg(&format!(
+                "{} is served, with a reader for each of {} secure elements: {}",
+                skyward_omapi::SERVICE,
+                readers.len(),
+                readers.join(", ")
+            ))?;
+            served_here = true;
+        }
+        services::start(std::slice::from_ref(program), libraries.as_deref())?;
+    }
     skyward_sys::kmsg(&format!("the configuration's programs came up in {:.2} s", starting.elapsed().as_secs_f64()))?;
     // Where the partitions say nothing of the keys, the programs the
     // configuration starts are all there is, and the phone's devices are up
