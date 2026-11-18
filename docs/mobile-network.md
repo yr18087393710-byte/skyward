@@ -2,6 +2,33 @@
 
 2026-11-18 起记。这里只写事实和步骤，写清楚到能直接照着做。
 
+## 进度（2026-11-18 下午，0.3.2 + 之后的提交）
+
+**第一步做成了**：recovery 里 `qcrilNrd` 与 `ssgqmigd` 都起来了，零秒退。
+
+```
+/dev/socket/qcrild      建好（我的一段 oneshot）
+/dev/socket/qmux_radio  建好（同上）
+/dev/socket/ssgqmig     建好（配置里新增的 init socket 支持，seqpacket 0660）
+ssgqmigd  pid 719       阻塞在 socket 上（它的空闲态）
+qcrilNrd  pid 718       5 个线程，零秒退
+modem 固件              Skyward 的 ueventd 从 /firmware/image/peach/amss20.bin 喂给了 mhi
+MHI 通道                /sys/bus/mhi/devices/ 里有 ADSP_0..3、IPCR、LOOPBACK
+解密                    同版照常（users [0,999] → []）
+```
+
+**卡在哪**：`qcrilNrd` 没有连上 QMI。证据是 `/proc/net/unix` 里只有一条
+`/dev/socket/ssgqmig`（监听态），**没有客户端**；`qcrilNrd` 也没打开任何 mhi/smdcntl 设备，
+只有两个 socket 和它的 DB。
+
+**一个被推翻的假设**：先前以为 qrtr 名字表空就是 modem 没起来。**错**——`qrtr-lookup`
+在 Android 里同样是空的（这台机器的 modem 走 glink/smd，不走 QRTR 名字服务）。所以别再用
+它判断 modem 死活。
+
+**下一步**：把 Android 里 `qcrilNrd` 的真实 fd 列表和 `/dev/socket/qmux_radio/` 里的内容
+抓下来（一次 `adb reboot` 就够），就知道它期望的传输是什么——是 `/dev/socket/qmux_radio`
+下的某个 socket、还是 `/dev/smdcntl8`、还是某个属性没设。缺什么补什么。
+
 ## 一句话结论
 
 能加，而且比想象中近：**IP 配置那一层 Skyward 已经有了**（`skyward-net::iface::configure` /
