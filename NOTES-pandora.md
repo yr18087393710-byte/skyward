@@ -49,9 +49,41 @@
 同样的配置、同样的文件、同样的 `nxp-nci`，在 `main-03`（0.3.0）上该程序能注册成功：
 `is served, with a reader for each of 1 secure elements: eSE1`，SE 崩溃计数 0。
 
-**结论：差异在启动该程序时给的运行环境，即 `crates/skyward/src/services.rs` 与
-`crates/skyward-programs`（0.3.0 vs 0.3.1）**：库搜索路径、seclabel、命名空间、继承的 fd。
-下一步只做这一件事：把两个 crate 在这两版之间对齐。
+### 已解决（2026-11-18 上午，分支 `pandora-decrypt` @ `898d97d`）
+
+真因不是 0.3.0/0.3.1 的差别，而是**recovery 自己的 `/system/lib64` 少了两个 system 库**：
+
+```
+/odm/bin/hw/android.hardware.weaver-service.nxp-qti: it said:
+  CANNOT LINK EXECUTABLE "…": library "libvndksupport.so" not found:
+  needed by /vendor/lib64/libhardware.so in namespace (default)
+```
+
+（这句话要先把 `services.rs` 里子进程的 stderr 从 `Stdio::null()` 改成 piped 并写进
+kmsg 才看得到 —— 现在 `run()` 会把程序自己说的最后一句话写进内核日志，保留。）
+
+三处改动，缺一不可：
+
+1. `devices/pandora/system/lib64/libdl_android.so`（真身在装好系统的
+   `lib64/bootstrap/`；`lib64/` 下那个是指向未挂载 apex 的断链）
+2. `devices/pandora/system/lib64/libvndksupport.so`（vendor 的 `libhardware.so` 要它）
+3. 启动顺序：`pandora.toml` 把安全世界的程序（qseecomd、hlosminkdaemon、onekeymint、
+   gatekeeper、secure_element、weaver）按 init 顺序写上并带全库路径；`bring_up` 逐条启动，
+   在 weaver 之前由 recovery 自己 `skyward_omapi::start()` 提供 OMAPI；链里同名程序不再重复启动。
+
+验证到的日志（这次是**真通**）：
+
+```
+[3.27] the recovery serves the secure element itself, for the weaver that reaches it through it
+[5.55] android.se.omapi.ISecureElementService/default is served … eSE1
+[5.65] …weaver-service.nxp-qti was ready in 0.10 s      ← weaver 崩 0 次（之前 41 次/秒）
+[6.24] the users whose own files are still closed: [0, 999]
+[6.24] opening user 0's files with the screen lock kept from before
+[6.74] the users whose own files are still closed: []   ← 自动解密成功
+```
+
+**省时间的教训**：这类“程序秒退”问题，第一步该做的是把它的 stderr 抓出来
+（`Stdio::piped` + 写 kmsg），而不是猜配置。今天为这一句话刷了六次机。
 
 ## 铁律（省钱的）
 
