@@ -173,7 +173,12 @@ jobs:
 
   release:
     name: Publish the release
-    if: github.ref_type == 'tag'
+    # A device whose stock build cannot be fetched -- its package sits in
+    # another repository, which may hand it out no longer -- fails its own
+    # build and would hold every other phone's release back. So the release
+    # goes ahead on the tag and the checks, and leaves off the phones that
+    # did not build, each said in the log.
+    if: always() && github.ref_type == 'tag' && needs.tag.result == 'success' && needs.check.result == 'success'
     needs: [tag, check, recovery]
     runs-on: ubuntu-24.04
     permissions:
@@ -204,9 +209,17 @@ jobs:
           for config in devices/*.toml; do
             device=$(basename "$config" .toml)
             model=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["device"]["model"])' "$config")
-            zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
+            zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip 2>/dev/null || true)
+            if [ -z "$zip" ]; then
+              echo "::warning::$device did not build on this tag, and is left off the release"
+              continue
+            fi
             zips+=("$zip#$model ($device)")
           done
+          if [ ${#zips[@]} -eq 0 ]; then
+            echo "::error::no device built on this tag, so there is no release to publish"
+            exit 1
+          fi
           # A release already published by hand, or by an earlier run of this
           # same tag, takes the zips of this build over its own: the build of a
           # tag is the release, whichever run made it.
