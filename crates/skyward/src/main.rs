@@ -673,6 +673,14 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
                 // service, and nothing else serves it in a recovery.
                 skyward_programs::secure::Step::ServeElements => true,
                 skyward_programs::secure::Step::Start(program) => {
+                    // A program the configuration names is started from the
+                    // configuration, with the libraries it gives it: the
+                    // phone's own init files say too little of the secure
+                    // world's programs, and one started from those alone ends
+                    // as it starts, which holds every program after it back.
+                    if cfg.services.iter().any(|known| known.path == program.service.path) {
+                        return false;
+                    }
                     let serves = program
                         .service
                         .ready_service

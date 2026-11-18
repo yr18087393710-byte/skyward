@@ -119,3 +119,65 @@ path = "/system/bin/se_omapi"
 # own: the installed system keeps one in /vendor/lib64 of another build, and
 # the weaver behind this asks for that one.
 libraries = ["/system/lib64/omapi", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+
+# The secure world's programs, in the order the installed system's init starts
+# them; without them nothing can use a key the phone wrapped in hardware, and
+# the data partition cannot be opened. The phone's own init files say less of
+# them than a recovery needs -- a program started from those alone ends as it
+# starts -- so they are named here with the libraries they ask for, and the
+# chain the partitions describe skips the ones named here.
+
+# The secure world reaches back into Android through the listeners this daemon
+# registers; without them the key service cannot use any key.
+[[service]]
+path = "/vendor/bin/qseecomd"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_property = "vendor.sys.listeners.registered"
+user = "root"
+groups = ["root", "drmrpc"]
+
+# The opener the secure world's apps are reached through by programs that speak
+# to them as GlobalPlatform's TEE client does, which loads those apps from
+# /vendor/firmware_mnt/image as they are first asked for.
+[[service]]
+path = "/vendor/bin/hlosminkdaemon"
+libraries = ["/system/lib64", "/vendor/lib64"]
+user = "system"
+groups = ["system", "oem_2912", "wakelock"]
+capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
+
+# The key service, which is the only thing that can use the keys the phone
+# wrapped in hardware. The same program serves the secure clock and the shared
+# secret, which the phone describes apart from it.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.security.onekeymint-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.security.keymint.IKeyMintDevice/default"
+registers = [
+    "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
+    "android.hardware.security.secureclock.ISecureClock/default",
+    "android.hardware.security.sharedsecret.ISharedSecret/default",
+]
+user = "system"
+groups = ["system", "drmrpc"]
+
+# The credential service: it is what the secure world has check the secret
+# behind a screen lock, and the only thing that can hand out the note the key
+# service wants before it will use a key that secret guards.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.gatekeeper-rust-service-qti"
+libraries = ["/system/lib64", "/vendor/lib64"]
+ready_service = "android.hardware.gatekeeper.IGatekeeper/default"
+user = "system"
+groups = ["system"]
+
+# The secure element: the phone's embedded one, which its own programs reach
+# through the HAL its vendor partition carries. The weaver's slots are in it,
+# so it runs before the weaver. It reaches the chip through the node the NFC
+# controller's driver makes, so that module is loaded first.
+[[service]]
+path = "/vendor/bin/hw/android.hardware.secure_element-service.qti"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+ready_service = "android.hardware.secure_element.ISecureElement/eSE1"
+user = "system"
+groups = ["nfc", "system"]
