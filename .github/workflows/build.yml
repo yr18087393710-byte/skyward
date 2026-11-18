@@ -207,4 +207,8 @@ jobs:
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
             zips+=("$zip#$model ($device)")
           done
-          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS
+          # A release already published by hand, or by an earlier run of this
+          # same tag, takes the zips of this build over its own: the build of a
+          # tag is the release, whichever run made it.
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes "${zips[@]}" images/SHA256SUMS \
+            || gh release upload "$GITHUB_REF_NAME" "${zips[@]}" images/SHA256SUMS --clobber
