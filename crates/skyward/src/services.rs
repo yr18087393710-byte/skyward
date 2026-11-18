@@ -385,7 +385,31 @@ fn run(s: &Service, who: &Credentials, given: &Given) -> Result<String> {
     // The program has its sockets now, and as init does, the recovery
     // keeps none of them open itself.
     drop(handed);
+    // What it says on its error stream while it ends is the only word of why
+    // it did: a program that ends as it starts is otherwise a bare status in
+    // the kernel log, and the reason -- a library it cannot find, an account
+    // it cannot be -- is the line it wrote and this recovery dropped.
+    let said = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut kept = Vec::new();
+            let mut buf = [0u8; 512];
+            while let Ok(n) = stderr.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                if kept.len() < 4096 {
+                    kept.extend_from_slice(&buf[..n]);
+                }
+            }
+            String::from_utf8_lossy(&kept).trim().to_string()
+        })
+    });
     let status = child.wait().context("wait for it")?;
+    let said = said.and_then(|thread| thread.join().ok()).unwrap_or_default();
+    if !said.is_empty() && !status.success() {
+        let _ = skyward_sys::kmsg(&format!("{}: it said: {}", s.path, said.replace('\n', " | ")));
+    }
     Ok(format!("pid {} ended: {status}", child.id()))
 }
 
@@ -397,7 +421,7 @@ fn run(s: &Service, who: &Credentials, given: &Given) -> Result<String> {
 /// searched after those it is given here.
 fn command(s: &Service, who: &Credentials, given: &Given, handed: &[(String, OwnedFd)]) -> Command {
     let mut cmd = Command::new(&s.path);
-    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(&s.args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut libraries = s.libraries.clone();
     for (name, value) in &given.environment {
         match name == LIBRARY_PATH {
