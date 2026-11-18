@@ -123,6 +123,10 @@ jobs:
       matrix:
         device: ${{ fromJSON(needs.devices.outputs.devices) }}
         experimental: [false]
+        # `include` adds a combination rather than changing one, so the phone
+        # is taken out of the plain list first and put back the one way.
+        exclude:
+          - device: byron
         include:
           - device: byron
             experimental: true
