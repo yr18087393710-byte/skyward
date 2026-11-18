@@ -29,6 +29,33 @@ MHI 通道                /sys/bus/mhi/devices/ 里有 ADSP_0..3、IPCR、LOOPBA
 抓下来（一次 `adb reboot` 就够），就知道它期望的传输是什么——是 `/dev/socket/qmux_radio`
 下的某个 socket、还是 `/dev/smdcntl8`、还是某个属性没设。缺什么补什么。
 
+## 后来的探测（2026-11-18 傍晚，结论：这条路今天走不通）
+
+`qcrilNrd` 在 recovery 里能完整初始化它的 AIDL 模块（RILQ、RadioConfig、Messaging、
+Modem、Network、Sim、Voice、UimRemote、Lpa 全部注册），然后**卡死在
+`QmiClientModule` 的初始化里**：日志停在注册 `QMI_CLIENT_CHECK_IF_SERVICE_UP` 之后，
+一共 600 行，不再往前走，也不报错。它既不建 `/dev/socket/qcrild/rild0`，也不连
+`/dev/socket/ssgqmig`（`/proc/net/unix` 里只有监听态，没有客户端）。
+
+补过的其它守护进程：
+
+| 程序 | 结果 |
+|---|---|
+| `ssgqmigd` | ✅ 起来，socket `/dev/socket/ssgqmig` 建好（配置里新增的 init socket 支持） |
+| `qmipriod` | ✅ 起来（它的字符串里有 `rmnet`、`wds`） |
+| `nicmd` | ❌ `CANNOT LINK EXECUTABLE: library "libcom.android.tethering.connectivity_native.so" not found` |
+| `qms` | ❌ 同一条库缺失 |
+| `servicemanager` | ✅ 本来就在跑（pid 524），不是瓶颈 |
+
+`nicmd` 与 `qms` 缺的库来自 Android 的 Connectivity **APEX**，recovery 里根本没有那个 APEX。
+也就是说：**Android 的 telephony 用户态在 recovery 里缺零件，不是差一个配置**。
+
+剩下唯一可行的路是自己当 QMI 客户端（连 `/dev/socket/ssgqmig` 发 WDS 请求），
+但那个 socket 上的帧格式是 Qualcomm 私有的（libqmi_cci 的 "ssg" 传输），
+没有文档，需要拿真机做逆向才能确定 —— 这是一项独立工程，不是一次会话能完成的。
+
+**电话**同理且更远：需要 RIL 起来 + 音频 HAL + 通话状态机。
+
 ## 一句话结论
 
 能加，而且比想象中近：**IP 配置那一层 Skyward 已经有了**（`skyward-net::iface::configure` /
