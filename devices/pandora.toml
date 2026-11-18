@@ -210,7 +210,7 @@ groups = ["vendor_nxp_weaver"]
 # stream go to the kernel log, which is what says why.
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "mkdir -p /dev/socket/qcrild /dev/socket/qmux_radio && chmod 0750 /dev/socket/qcrild && chmod 2770 /dev/socket/qmux_radio"]
+args = ["-c", "mkdir -p /dev/socket/qcrild /dev/socket/qmux_radio /dev/socket/nicmd && chmod 0750 /dev/socket/qcrild && chmod 2770 /dev/socket/qmux_radio && chmod 0770 /dev/socket/nicmd"]
 oneshot = true
 libraries = ["/system/lib64", "/vendor/lib64"]
 
@@ -226,6 +226,15 @@ libraries = ["/system/lib64", "/vendor/lib64"]
 [[service.sockets]]
 name = "ssgqmig"
 kind = "seqpacket"
+mode = 0o660
+
+# The second socket the same daemon answers on, and the one the QMI clients
+# the phone's own programs use actually connect to: without it they say
+# "qmi_client_init_instance status: -3" and give up, which is what the RIL and
+# the modem's own programs did here until it was made.
+[[service.sockets]]
+name = "ssgtzd"
+kind = "stream"
 mode = 0o660
 
 # The rest of the phone's radio userspace, as its own init starts it: the QMI
