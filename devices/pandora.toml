@@ -228,6 +228,24 @@ name = "ssgqmig"
 kind = "seqpacket"
 mode = 0o660
 
+# The rest of the phone's radio userspace, as its own init starts it: the QMI
+# priority daemon, the one that brings network interfaces up for the modem's
+# links, and the QMI service the modem's own programs register with. They link
+# only once the recovery carries libcom.android.tethering.connectivity_native.so
+# from the Connectivity APEX, which it does: without it both end as they start
+# with "library ... not found" on their error stream.
+[[service]]
+path = "/vendor/bin/qmipriod"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+
+[[service]]
+path = "/vendor/bin/nicmd"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+
+[[service]]
+path = "/vendor/bin/qms"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
+
 [[service]]
 path = "/vendor/bin/hw/qcrilNrd"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
