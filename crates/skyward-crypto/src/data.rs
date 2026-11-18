@@ -4,7 +4,6 @@
 //! what it opens holds every file, with the names and contents of the ones
 //! that are a user's own still encrypted.
 
-use crate::encryption::{key_dir, target, Encryption};
 use crate::gatekeeper::Gatekeeper;
 use crate::keymint::KeyMint;
 use crate::keystore::{StoredKey, Unwrap};
@@ -13,6 +12,7 @@ use crate::user::Bound;
 use crate::weaver::Weaver;
 use anyhow::{Context, Result};
 use skyward_binder::driver::Binder;
+use skyward_block::dm::Target;
 use skyward_block::fsck::Checked;
 use skyward_block::fstab::Entry;
 use skyward_block::{dm, mount};
@@ -32,11 +32,42 @@ pub const SDCARD: &str = "/sdcard";
 /// The phone's owner, the first of its users.
 const OWNER: u32 = 0;
 
-/// The second space HyperOS keeps: a user of its own, whose files are kept
-/// behind the owner's credential. Opening them is a second unlock, behind the
-/// one the page asked for, and one that can leave the page waiting; the
-/// recovery leaves them closed.
-const SECOND_SPACE: u32 = 999;
+/// The key is in a directory of this name under the one the phone names.
+const KEY_DIR: &str = "key";
+
+/// How the kernel knows the cipher a phone names.
+const CIPHERS: [(&str, &str); 2] = [("aes-256-xts", "aes-xts-plain64"), ("adiantum", "xchacha12,aes-adiantum-plain64")];
+
+/// The hardware reads and writes in 4096-byte units, so the partition is
+/// mapped in whole multiples of eight 512-byte sectors.
+const SECTORS_PER_UNIT: u64 = 8;
+
+/// How a phone says its data partition is encrypted: the cipher, and
+/// whether the key is one only the storage hardware can unwrap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Encryption {
+    pub cipher: String,
+    pub wrapped: bool,
+}
+
+impl Encryption {
+    /// Read what an entry of the phone's own table says.
+    pub fn of(entry: &Entry) -> Result<Encryption> {
+        let said = entry.extra("metadata_encryption").context("the phone says its data partition is not encrypted whole")?;
+        let (name, rest) = said.split_once(':').unwrap_or((said, ""));
+        let cipher = CIPHERS
+            .iter()
+            .find_map(|(theirs, kernels)| (*theirs == name).then_some(*kernels))
+            .with_context(|| format!("no cipher here is the {name} the phone names"))?;
+        Ok(Encryption { cipher: cipher.to_string(), wrapped: rest == "wrappedkey_v0" })
+    }
+}
+
+/// Where the phone keeps the key for the filesystem an entry describes.
+pub fn key_dir(entry: &Entry) -> Result<PathBuf> {
+    let dir = entry.extra("keydirectory").context("the phone says where the key for its data partition is not")?;
+    Ok(Path::new(dir).join(KEY_DIR))
+}
 
 /// Unwrap the key the phone keeps for its data partition and give the
 /// storage hardware the form of it that lasts until the phone is started
@@ -90,12 +121,9 @@ fn open(service: &KeyMint) -> Result<Opened> {
     })();
     match mounted {
         Ok((checked, filesystem)) => Ok(Opened { mapped, filesystem, checked }),
-        Err(e) => match dm::status(MAPPED) {
-            Ok(Some(_)) => match dm::remove(MAPPED) {
-                Ok(()) => Err(e),
-                Err(r) => Err(e.context(format!("removing {MAPPED} afterwards failed too: {r:#}"))),
-            },
-            _ => Err(e),
+        Err(e) => match dm::remove(MAPPED) {
+            Ok(()) => Err(e),
+            Err(r) => Err(e.context(format!("removing {MAPPED} afterwards failed too: {r:#}"))),
         },
     }
 }
@@ -108,11 +136,6 @@ fn map(service: &KeyMint) -> Result<(Vec<Entry>, PathBuf)> {
     let entry = entries.first().with_context(|| format!("the phone's own table says nothing about {MOUNT}"))?;
     let encryption = Encryption::of(entry)?;
     let device = skyward_block::fstab::device(entry)?;
-    // A partition whose own filesystem can be read has nothing in front of it:
-    // there is no key to unwrap, and no device to put before it.
-    if skyward_block::probe::filesystem(Path::new(&device))?.is_some() {
-        return Ok((entries, PathBuf::from(device)));
-    }
     let key = storage_key(service, entry, &encryption)?;
     let sectors = skyward_block::size_bytes(&device)? / 512;
     let mapped = dm::create(MAPPED, &[target(&device, sectors, &key, &encryption)], false)?;
@@ -129,10 +152,7 @@ pub fn map_unmounted(service: &KeyMint) -> Result<PathBuf> {
 
 /// Take away the mapping [`map_unmounted`] made.
 pub fn unmap() -> Result<()> {
-    match dm::status(MAPPED)? {
-        Some(_) => dm::remove(MAPPED),
-        None => Ok(()),
-    }
+    dm::remove(MAPPED)
 }
 
 /// Show the owner's shared storage at /sdcard; shown already, it stays.
@@ -189,22 +209,10 @@ pub fn open_without_credential(service: &KeyMint) -> Result<Opening> {
         true => None,
         false => Some(open(service)?),
     };
-    // A partition that keeps no key for the files readable before anyone signs
-    // in is read as the phone's system reads it: every file is open already,
-    // and no user is left closed.
-    if !Path::new(FILE_MODE).exists() {
-        show_owner_storage()?;
-        return Ok(Opening { mounted, closed: Vec::new() });
-    }
     open_shared(service)?;
     let mut closed = Vec::new();
     let mut owner = Note::default();
     for user in open_users(service)? {
-        // The second space is left closed: its unlock follows the owner's, and
-        // a page waiting on it looks stuck.
-        if user == SECOND_SPACE {
-            continue;
-        }
         let protector = protector(user)?;
         match protector.lock {
             None => {
@@ -329,10 +337,10 @@ fn protector(user: u32) -> Result<crate::user::Protector> {
     let mut ids = Vec::new();
     for entry in std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
         let path = entry.with_context(|| format!("read {}", dir.display()))?.path();
-        if path.extension().is_some_and(|e| e == "spblob")
-            && let Some(id) = path.file_stem().and_then(|s| s.to_str())
-        {
-            ids.push(id.to_string());
+        if path.extension().is_some_and(|e| e == "spblob") {
+            if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
+                ids.push(id.to_string());
+            }
         }
     }
     let id = match crate::locksettings::current_protector(Path::new(crate::locksettings::DATABASE), user)? {
@@ -356,70 +364,30 @@ fn protector(user: u32) -> Result<crate::user::Protector> {
             ),
         },
     };
-    // What one blob keeps the user's secret behind, read as it lies.
-    let build = |id: &str| -> Result<crate::user::Protector> {
-        // A user who has set a screen lock has what the phone recorded about
-        // it beside the blob; a user who has set none has nothing there.
-        let recorded = dir.join(format!("{id}.pwd"));
-        let lock = match recorded.exists() {
-            true => Some(crate::user::Lock::of(
-                &std::fs::read(&recorded).with_context(|| format!("read {}", recorded.display()))?,
-            )?),
-            false => None,
-        };
-        // A phone with a weaver records the slot it keeps for the blob; any
-        // other keeps the bytes the blob is bound to beside it.
-        let slot = dir.join(format!("{id}.weaver"));
-        let bound = match slot.exists() {
-            true => Bound::Weaver(crate::user::weaver_slot(&std::fs::read(&slot).with_context(|| format!("read {}", slot.display()))?)?),
-            false => Bound::Secdiscardable(
-                std::fs::read(dir.join(format!("{id}.secdis"))).with_context(|| format!("read what the blob in {} is bound to", dir.display()))?,
-            ),
-        };
-        Ok(crate::user::Protector {
-            blob: std::fs::read(dir.join(format!("{id}.spblob"))).with_context(|| format!("read the blob in {}", dir.display()))?,
-            bound,
-            id: id.to_string(),
-            lock,
-        })
+    // A user who has set a screen lock has what the phone recorded about
+    // it beside the blob; a user who has set none has nothing there.
+    let recorded = dir.join(format!("{id}.pwd"));
+    let lock = match recorded.exists() {
+        true => Some(crate::user::Lock::of(
+            &std::fs::read(&recorded).with_context(|| format!("read {}", recorded.display()))?,
+        )?),
+        false => None,
     };
-    let first = build(&id)?;
-    // The weaver of a phone that has one lives in its secure element, reached
-    // through the phone's own OMAPI service; a recovery runs none of Android's
-    // framework, so the blob the lock settings name cannot be opened there even
-    // where the weaver's service answers. Android keeps a second blob for the
-    // same user bound to the bytes beside it, which the credential service
-    // alone opens: that one is taken instead, and opens the same secret with the
-    // same credential. A phone whose weaver answers sets that it is used first.
-    if matches!(first.bound, Bound::Weaver(_)) && !weaver_first() {
-        let other = ids.iter().find(|other| {
-            other.as_str() != id.as_str()
-                && dir.join(format!("{other}.secdis")).is_file()
-                && dir.join(format!("{other}.pwd")).is_file()
-        });
-        if let Some(other) = other {
-            let alt = build(other)?;
-            if matches!(alt.bound, Bound::Secdiscardable(_)) {
-                return Ok(alt);
-            }
-        }
-    }
-    Ok(first)
-}
-
-/// Whether the weaver's own slots are used for a phone whose blobs are bound to
-/// it: said once by the program that read the configuration, before the data
-/// partition is opened.
-static WEAVER_FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Says whether the weaver's own slots are used, as the phone's configuration
-/// asks. Left unsaid, the other blob is taken.
-pub fn use_weaver_first(yes: bool) {
-    WEAVER_FIRST.store(yes, std::sync::atomic::Ordering::Relaxed);
-}
-
-fn weaver_first() -> bool {
-    WEAVER_FIRST.load(std::sync::atomic::Ordering::Relaxed)
+    // A phone with a weaver records the slot it keeps for the blob; any
+    // other keeps the bytes the blob is bound to beside it.
+    let slot = dir.join(format!("{id}.weaver"));
+    let bound = match slot.exists() {
+        true => Bound::Weaver(crate::user::weaver_slot(&std::fs::read(&slot).with_context(|| format!("read {}", slot.display()))?)?),
+        false => Bound::Secdiscardable(
+            std::fs::read(dir.join(format!("{id}.secdis"))).with_context(|| format!("read what the blob in {} is bound to", dir.display()))?,
+        ),
+    };
+    Ok(crate::user::Protector {
+        blob: std::fs::read(dir.join(format!("{id}.spblob"))).with_context(|| format!("read the blob in {}", dir.display()))?,
+        bound,
+        id,
+        lock,
+    })
 }
 
 /// Which of the secure world's slots a user's enrolments sit in. What the
@@ -594,4 +562,64 @@ fn secret_note(user: u32, synthetic_password: &[u8]) -> Result<Note> {
         Ok(token) => Note { token: Some(token), refused: None },
         Err(e) => Note { token: None, refused: Some(format!("{e:#}")) },
     })
+}
+
+/// Build the device-mapper target that reads the partition through the
+/// storage hardware's decryption.
+pub fn target(device: &str, sectors: u64, key: &[u8], encryption: &Encryption) -> Target {
+    Target::DefaultKey {
+        sectors: sectors - sectors % SECTORS_PER_UNIT,
+        device: device.to_string(),
+        cipher: encryption.cipher.clone(),
+        key: key.iter().map(|b| format!("{b:02x}")).collect(),
+        wrapped: encryption.wrapped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(extras: &str) -> Entry {
+        Entry {
+            device: "/dev/block/bootdevice/by-name/userdata".into(),
+            mount_point: MOUNT.into(),
+            filesystem: "f2fs".into(),
+            options: vec!["noatime".into(), "inlinecrypt".into()],
+            extras: extras.split(',').map(str::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn the_phones_own_words_for_the_cipher_become_the_kernels() {
+        let e = entry("metadata_encryption=aes-256-xts:wrappedkey_v0,keydirectory=/metadata/vold/metadata_encryption");
+        assert_eq!(Encryption::of(&e).unwrap(), Encryption { cipher: "aes-xts-plain64".into(), wrapped: true });
+        let plain = entry("metadata_encryption=adiantum");
+        assert_eq!(Encryption::of(&plain).unwrap(), Encryption { cipher: "xchacha12,aes-adiantum-plain64".into(), wrapped: false });
+    }
+
+    #[test]
+    fn a_cipher_or_a_key_the_phone_does_not_name_is_an_error() {
+        assert!(Encryption::of(&entry("quota")).is_err());
+        assert!(Encryption::of(&entry("metadata_encryption=rot13")).is_err());
+        assert!(key_dir(&entry("quota")).is_err());
+    }
+
+    #[test]
+    fn the_key_is_in_a_directory_under_the_one_the_phone_names() {
+        let e = entry("keydirectory=/metadata/vold/metadata_encryption");
+        assert_eq!(key_dir(&e).unwrap(), Path::new("/metadata/vold/metadata_encryption/key"));
+    }
+
+    #[test]
+    fn the_partition_is_mapped_in_whole_units_of_the_hardwares_reads() {
+        let e = Encryption { cipher: "aes-xts-plain64".into(), wrapped: true };
+        let t = target("/dev/block/by-name/userdata", 969_825_751, &[0xAB, 0x01], &e);
+        let Target::DefaultKey { sectors, key, cipher, device, wrapped } = t else { panic!("a decrypting target") };
+        assert_eq!(sectors, 969_825_744, "a whole number of 4096-byte units");
+        assert_eq!(key, "ab01");
+        assert_eq!(cipher, "aes-xts-plain64");
+        assert_eq!(device, "/dev/block/by-name/userdata");
+        assert!(wrapped);
+    }
 }
