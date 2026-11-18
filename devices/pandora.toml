@@ -210,9 +210,23 @@ groups = ["vendor_nxp_weaver"]
 # stream go to the kernel log, which is what says why.
 [[service]]
 path = "/vendor/bin/sh"
-args = ["-c", "mkdir -p /dev/socket/qcrild && chmod 0750 /dev/socket/qcrild"]
+args = ["-c", "mkdir -p /dev/socket/qcrild /dev/socket/qmux_radio && chmod 0750 /dev/socket/qcrild && chmod 2770 /dev/socket/qmux_radio"]
 oneshot = true
 libraries = ["/system/lib64", "/vendor/lib64"]
+
+# The QMI daemon the phone's init starts beside the RIL: it reads its socket out
+# of ANDROID_SOCKET_ssgqmig, which init makes for it before starting it, and
+# gives up where that is not there. The socket is said here so the recovery
+# makes it the same way. Off the phone, this is the one that turns the QMI the
+# RIL asks for into the packets the modem's link carries.
+[[service]]
+path = "/vendor/bin/ssgqmigd"
+libraries = ["/system/lib64", "/vendor/lib64"]
+
+[[service.sockets]]
+name = "ssgqmig"
+kind = "seqpacket"
+mode = 0o660
 
 [[service]]
 path = "/vendor/bin/hw/qcrilNrd"

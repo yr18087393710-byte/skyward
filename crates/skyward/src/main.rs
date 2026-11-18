@@ -318,7 +318,7 @@ fn main() -> Result<()> {
         Cmd::Services { config } => {
             let slot = booted_slot()?;
             let props = skyward_info::installed_props(slot)?;
-            let services: Vec<Started> = DeviceConfig::load(&config)?.services.into_iter().filter(|s| s.runs_on(&props)).map(Started::from).collect();
+            let services: Vec<Started> = DeviceConfig::load(&config)?.services.into_iter().filter(|s| s.runs_on(&props)).map(|s| started(&s)).collect();
             let libraries = secure::libraries()?;
             services::start(&services, libraries.as_deref())?;
             keys::start(&keys::found(slot, libraries.as_deref())?.steps?, libraries.as_deref())?;
@@ -609,6 +609,34 @@ pub(crate) fn prepared() -> bool {
 /// recovery serves has to be up for before it starts.
 const WEAVER_SERVICE: &str = "android.hardware.weaver.IWeaver/default";
 
+/// A program the configuration names, with the sockets it says are made for it
+/// before it starts, as init makes them: a program written to be started by a
+/// phone's init reads its socket out of `ANDROID_SOCKET_<name>` and gives up
+/// where that is not there, the phone's QMI daemon among them.
+#[cfg(target_os = "android")]
+fn started(service: &skyward_config::Service) -> Started {
+    use skyward_programs::script::{Socket, SocketKind};
+    let mut program = Started::from(service.clone());
+    program.sockets = service
+        .sockets
+        .iter()
+        .map(|socket| Socket {
+            name: socket.name.clone(),
+            kind: match socket.kind {
+                skyward_config::SocketKindName::Stream => SocketKind::Stream,
+                skyward_config::SocketKindName::Dgram => SocketKind::Dgram,
+                skyward_config::SocketKindName::Seqpacket => SocketKind::Seqpacket,
+            },
+            passcred: socket.passcred,
+            listen: socket.listen,
+            mode: socket.mode.unwrap_or(0o660),
+            user: socket.user.clone(),
+            group: socket.group.clone(),
+        })
+        .collect();
+    program
+}
+
 /// The programs that use the phone's keys come after them, as `found` among
 /// the phone's partitions: where what the partitions say could not be made
 /// out, the phone's devices are up before that is said.
@@ -626,7 +654,7 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     {
         skyward_sys::kmsg(&format!("logd not started: {e:#}"))?;
     }
-    let mut services: Vec<Started> = cfg.services.iter().filter(|s| s.runs_on(&props)).cloned().map(Started::from).collect();
+    let mut services: Vec<Started> = cfg.services.iter().filter(|s| s.runs_on(&props)).map(started).collect();
     // The drivers ask for their firmware by name, and the kernel looks only
     // in folders of its own unless told to pass on what it does not find
     // there to ueventd, which looks in the recovery's firmware folders.

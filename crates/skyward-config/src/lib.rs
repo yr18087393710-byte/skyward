@@ -417,6 +417,49 @@ pub struct Service {
     /// names it: it keeps these alone, through its change of user.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Sockets init makes for the program before it starts it, each handed
+    /// over as `ANDROID_SOCKET_<name>`, as init's own `socket` lines do. A
+    /// program written to be started by a phone's init reads the socket from
+    /// that variable and gives up where it is not there -- the phone's QMI
+    /// daemon among them -- so one the configuration starts needs the socket
+    /// said here too.
+    #[serde(default)]
+    pub sockets: Vec<ServiceSocket>,
+}
+
+/// A socket the recovery makes for a program before starting it, as init makes
+/// one: named, of a kind, with a mode, and given to a user and a group.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ServiceSocket {
+    /// Its name under `/dev/socket`, and the name in the variable it is handed
+    /// over by.
+    pub name: String,
+    #[serde(default)]
+    pub kind: SocketKindName,
+    /// Its mode, as init writes it: `0o660` for a socket both sides use.
+    #[serde(default)]
+    pub mode: Option<u32>,
+    /// The peer's credentials come with what it sends.
+    #[serde(default)]
+    pub passcred: bool,
+    /// The recovery has it listen before handing it over.
+    #[serde(default)]
+    pub listen: bool,
+    /// The user and the group it is given; root where none is said.
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
+}
+
+/// The kind of a socket, by the name init's `socket` lines give it.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SocketKindName {
+    #[default]
+    Stream,
+    Dgram,
+    Seqpacket,
 }
 
 /// The kernel's capabilities, by the names init's capabilities lines give
