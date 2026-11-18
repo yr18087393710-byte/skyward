@@ -453,7 +453,7 @@ pub struct ServiceSocket {
 }
 
 /// The kind of a socket, by the name init's `socket` lines give it.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SocketKindName {
     #[default]
