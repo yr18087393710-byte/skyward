@@ -218,11 +218,21 @@ libraries = ["/system/lib64", "/vendor/lib64"]
 # modemfirmware partition, which ueventd does not look in, so the recovery puts it
 # where ueventd does look and then has the kernel boot the processor. Without this
 # the modem stays offline and every QMI client under it gives up.
-[[service]]
-path = "/vendor/bin/sh"
-args = ["/system/bin/start_modem.sh"]
-oneshot = true
-libraries = ["/system/lib64", "/vendor/lib64"]
+#
+# SCRIPTED BUT NOT STARTED, on purpose: with it on, the modem boots (the kernel
+# says "remote processor 4080000.remoteproc-mss is now up" at 6.2 s, which is the
+# first time a recovery on this phone ever got that far), but 60 to 70 seconds
+# later the phone resets itself -- the modem crashes once nobody serves what it
+# expects, and this phone's watchdog then reboots. A recovery that reboots every
+# minute is worse than one without mobile data, so the line below stays out until
+# the modem's own needs are met. /system/bin/start_modem.sh is kept in the image:
+# put the service back and the modem comes up again.
+#
+# [[service]]
+# path = "/vendor/bin/sh"
+# args = ["/system/bin/start_modem.sh"]
+# oneshot = true
+# libraries = ["/system/lib64", "/vendor/lib64"]
 
 # The QMI daemon the phone's init starts beside the RIL: it reads its socket out
 # of ANDROID_SOCKET_ssgqmig, which init makes for it before starting it, and

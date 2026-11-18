@@ -2,6 +2,31 @@
 
 2026-11-18 起记。这里只写事实和步骤，写清楚到能直接照着做。
 
+## 最新（2026-11-18 下午，最关键的一条）
+
+**modem 在恢复系统里开机了。** 这是这台机器上第一次：
+
+```
+mount --bind /mnt/modemfirmware/image /etc/firmware
+echo start > /sys/class/remoteproc/remoteproc2/state
+
+[ 5.828754] remoteproc remoteproc2: Booting fw image modem.mdt, size 7252
+[ 6.196125] remoteproc remoteproc2: remote processor 4080000.remoteproc-mss is now up
+```
+
+原因是：modem 固件在 `modemfirmware_a/_b` 分区里（分区内是一层 `image/`），
+而内核通过 ueventd 找 `modem.mdt` 时只搜 `/etc/firmware`、`/odm/firmware`、
+`/vendor/firmware`、`/firmware/image`——恢复系统一个都没挂，于是
+`request_firmware failed: -2`、modem 永远 `offline`。
+
+脚本在 `devices/pandora/system/bin/start_modem.sh`。
+
+**但它在配置里是注释掉的**，因为：modem 起来后 **60～70 秒整机会自己重启**
+（modem 崩溃 → 小米的 watchdog 重启）。要排查的是 modem 起来后缺的服务
+（最像的是给 modem 提供 EFS/文件的那层，Android 上由它自己的服务做）。
+判据：modem 起来后 `qrtr-lookup` 里出现服务、`qcrilNrd` 不再报
+`qmi_client_init_instance status: -3`、`/dev/socket/qcrild/rild0` 出现。
+
 ## 进度（2026-11-18 下午，0.3.2 + 之后的提交）
 
 **第一步做成了**：recovery 里 `qcrilNrd` 与 `ssgqmigd` 都起来了，零秒退。
