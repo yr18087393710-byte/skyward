@@ -95,3 +95,23 @@ recovery = "98aa593c95e9cd3a79f9cbd95f49e240f9dda482640083a3e89ff4d3164d0852"
 [haptics]
 resonance = "/sys/class/qcom-haptics/lra_frequency_hz"
 strength = { lightest = 0.25, strongest = 0.75 }
+
+# The service the weaver asks the secure element's applets through. Android
+# keeps it in its framework, which a recovery runs none of: the installed
+# system answers it from com.android.se, a program of its own that only a
+# running framework starts. This recovery carries its own se_omapi, built to
+# run here, laid in the recovery's tree with the libraries it asks for and
+# the description of the service it answers as, so that the image works on
+# the phone with nothing put there for it.
+#
+# It is started without being waited on. A program that registers nothing
+# would hold up every program after it for the whole ready timeout, and the
+# weaver is what has to run: left to itself, the weaver starts, fails while
+# no service answers, and is started again, so it meets the service as soon
+# as the service is there.
+[[service]]
+path = "/system/bin/se_omapi"
+# Its own copy of the interface's library comes first, in a folder of its
+# own: the installed system keeps one in /vendor/lib64 of another build, and
+# the weaver behind this asks for that one.
+libraries = ["/system/lib64/omapi", "/system/lib64", "/vendor/lib64", "/odm/lib64", "/vendor/lib64/hw", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
