@@ -214,6 +214,16 @@ args = ["-c", "mkdir -p /dev/socket/qcrild /dev/socket/qmux_radio /dev/socket/ni
 oneshot = true
 libraries = ["/system/lib64", "/vendor/lib64"]
 
+# The modem itself, before anything that would talk to it: its firmware is in the
+# modemfirmware partition, which ueventd does not look in, so the recovery puts it
+# where ueventd does look and then has the kernel boot the processor. Without this
+# the modem stays offline and every QMI client under it gives up.
+[[service]]
+path = "/vendor/bin/sh"
+args = ["/system/bin/start_modem.sh"]
+oneshot = true
+libraries = ["/system/lib64", "/vendor/lib64"]
+
 # The QMI daemon the phone's init starts beside the RIL: it reads its socket out
 # of ANDROID_SOCKET_ssgqmig, which init makes for it before starting it, and
 # gives up where that is not there. The socket is said here so the recovery
