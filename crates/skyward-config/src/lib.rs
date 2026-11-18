@@ -429,7 +429,7 @@ pub struct Service {
 
 /// A socket the recovery makes for a program before starting it, as init makes
 /// one: named, of a kind, with a mode, and given to a user and a group.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ServiceSocket {
     /// Its name under `/dev/socket`, and the name in the variable it is handed
     /// over by.
