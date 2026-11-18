@@ -194,3 +194,26 @@ libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64",
 ready_service = "android.hardware.weaver.IWeaver/default"
 user = "vendor_nxp_weaver"
 groups = ["vendor_nxp_weaver"]
+
+# The modem's own program, the first look at whether a recovery can bring mobile
+# data up at all. The phone's init starts it disabled and lets the framework
+# start it; a recovery runs no framework, so it is started here.
+#
+# It runs as root for now: the account it runs as on the phone, radio, is one of
+# Android's own, written into bionic rather than /vendor/etc/passwd, so it is not
+# a name this recovery can hand a program yet. Root can do what radio does and
+# more, which is enough to find out whether the modem comes up at all.
+#
+# It is started without being waited on: a program that registers nothing would
+# hold the queue behind it for the whole ready timeout, and nothing behind it
+# waits for the modem. Where it ends as it starts, its own words on the error
+# stream go to the kernel log, which is what says why.
+[[service]]
+path = "/vendor/bin/sh"
+args = ["-c", "mkdir -p /dev/socket/qcrild && chmod 0750 /dev/socket/qcrild"]
+oneshot = true
+libraries = ["/system/lib64", "/vendor/lib64"]
+
+[[service]]
+path = "/vendor/bin/hw/qcrilNrd"
+libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]
