@@ -666,20 +666,25 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     let found = found.map(|steps| {
         steps
             .into_iter()
-            .filter(|step| match step {
+            .filter_map(|step| match step {
                 // The recovery serves Android's secure element service itself,
                 // the phone's own program for it ending as it starts here: the
                 // weaver that reaches its secure element through it needs the
                 // service, and nothing else serves it in a recovery.
-                skyward_programs::secure::Step::ServeElements => true,
-                skyward_programs::secure::Step::Start(program) => {
-                    // A program the configuration names is started from the
-                    // configuration, with the libraries it gives it: the
-                    // phone's own init files say too little of the secure
-                    // world's programs, and one started from those alone ends
-                    // as it starts, which holds every program after it back.
-                    if cfg.services.iter().any(|known| known.path == program.service.path) {
-                        return false;
+                skyward_programs::secure::Step::ServeElements => Some(skyward_programs::secure::Step::ServeElements),
+                skyward_programs::secure::Step::Start(mut program) => {
+                    // The libraries a program of the secure world asks for are
+                    // not all named by the phone's own init file: they reach
+                    // back into /mnt/system for what a recovery carries none
+                    // of, and a program started with only what that file names
+                    // ends as it starts, every second, which holds the keys
+                    // back. Where the configuration names the same program, its
+                    // libraries are the ones it runs with; the order and the
+                    // waiting stay as the partitions say them.
+                    if let Some(known) = cfg.services.iter().find(|known| known.path == program.service.path) {
+                        if !known.libraries.is_empty() {
+                            program.service.libraries = known.libraries.clone();
+                        }
                     }
                     let serves = program
                         .service
@@ -697,8 +702,10 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
                             .cloned()
                             .unwrap_or_else(|| program.service.path.clone());
                         left_out.push(format!("{} ({what})", program.service.path));
+                        None
+                    } else {
+                        Some(skyward_programs::secure::Step::Start(program))
                     }
-                    !serves
                 }
             })
             .collect::<Vec<_>>()
@@ -802,6 +809,21 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     }
     skyward_ui::progress::reached(skyward_ui::progress::SERVICES);
     let starting = std::time::Instant::now();
+    // A program the phone's own chain starts is not started here as well: the
+    // chain knows the order the secure world's programs need -- the service the
+    // recovery serves among them, before the weaver that asks it -- and the
+    // configuration is what gave the chain their libraries.
+    let in_the_chain: Vec<String> = found
+        .as_ref()
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|step| match step {
+            skyward_programs::secure::Step::Start(program) => Some(program.service.path.clone()),
+            skyward_programs::secure::Step::ServeElements => None,
+        })
+        .collect();
+    let services: Vec<Started> = services.into_iter().filter(|s| !in_the_chain.contains(&s.service.path)).collect();
     services::start(&services, libraries.as_deref())?;
     skyward_sys::kmsg(&format!("the configuration's programs came up in {:.2} s", starting.elapsed().as_secs_f64()))?;
     // Where the partitions say nothing of the keys, the programs the
