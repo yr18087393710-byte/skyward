@@ -813,16 +813,16 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     // chain knows the order the secure world's programs need -- the service the
     // recovery serves among them, before the weaver that asks it -- and the
     // configuration is what gave the chain their libraries.
-    let in_the_chain: Vec<String> = found
-        .as_ref()
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(|step| match step {
-            skyward_programs::secure::Step::Start(program) => Some(program.service.path.clone()),
-            skyward_programs::secure::Step::ServeElements => None,
-        })
-        .collect();
+    let in_the_chain: Vec<String> = match found.as_ref() {
+        Ok(steps) => steps
+            .iter()
+            .filter_map(|step| match step {
+                skyward_programs::secure::Step::Start(program) => Some(program.service.path.clone()),
+                skyward_programs::secure::Step::ServeElements => None,
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
     let services: Vec<Started> = services.into_iter().filter(|s| !in_the_chain.contains(&s.service.path)).collect();
     services::start(&services, libraries.as_deref())?;
     skyward_sys::kmsg(&format!("the configuration's programs came up in {:.2} s", starting.elapsed().as_secs_f64()))?;
