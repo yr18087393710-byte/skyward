@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use skyward_block::area::Area;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 /// Where the state is kept.
@@ -33,6 +33,9 @@ pub struct State {
     pub written: Option<Written>,
     /// A switch begun and not yet done.
     pub switching: Option<Switching>,
+    /// Files owned by an installation that has not committed a system yet.
+    #[serde(default)]
+    pub installing: Option<Installing>,
 }
 
 /// The SHA-256 of each of a slot's boot partitions, whole, as they read
@@ -93,6 +96,30 @@ impl System {
     }
 }
 
+/// An installation owns only names derived from this random transaction id.
+/// Its intent is durable before either file is created, even before an Area
+/// header or extent list exists. A previously committed store is never owned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Installing {
+    pub transaction: String,
+    pub new_store: bool,
+}
+
+impl Installing {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(self.transaction.len() == 32 && self.transaction.bytes().all(|b| b.is_ascii_hexdigit()), "an installation transaction is 32 hexadecimal digits");
+        Ok(())
+    }
+
+    pub fn root_file(&self, folder: &Path) -> std::path::PathBuf {
+        folder.join(format!("root-{}.img", self.transaction))
+    }
+
+    pub fn store_file(&self, folder: &Path) -> std::path::PathBuf {
+        folder.join(format!("store-{}", self.transaction))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Switching {
     pub to: Who,
@@ -137,15 +164,33 @@ impl State {
     /// Keep the state at `path` whole or not at all: written beside it,
     /// synced, put in its place, and the folder synced.
     pub fn save(&self, path: &Path) -> Result<()> {
+        self.save_with_directory_sync(path, |dir| File::open(dir)?.sync_all())
+    }
+
+    fn save_with_directory_sync(&self, path: &Path, mut sync: impl FnMut(&Path) -> std::io::Result<()>) -> Result<()> {
         let dir = path.parent().context("the state is kept in a folder")?;
         fs::create_dir_all(dir).with_context(|| format!("make {}", dir.display()))?;
+        // Retry ancestor syncs even when the folder exists: an earlier save
+        // may have created it but stopped before its parent was durable.
+        // Stop at this filesystem's root; /metadata does not need the
+        // ramdisk's root directory synced to persist its own entries.
+        let device = fs::metadata(dir)?.dev();
+        let mut directory = Some(dir);
+        while let Some(at) = directory {
+            directory = at.parent();
+            let at = if at.as_os_str().is_empty() { Path::new(".") } else { at };
+            if fs::metadata(at)?.dev() != device {
+                break;
+            }
+            sync(at).with_context(|| format!("sync {}", at.display()))?;
+        }
         let text = toml::to_string(self).context("write the systems' state")?;
         let tmp = path.with_extension("toml.new");
         let mut f = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).with_context(|| format!("open {}", tmp.display()))?;
         f.write_all(text.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
         f.sync_all().with_context(|| format!("sync {}", tmp.display()))?;
         fs::rename(&tmp, path).with_context(|| format!("put {} in place of {}", tmp.display(), path.display()))?;
-        File::open(dir).and_then(|d| d.sync_all()).with_context(|| format!("sync {}", dir.display()))
+        sync(dir).with_context(|| format!("sync {}", dir.display()))
     }
 
     /// Which system's boot set the boot partitions of `slot` hold.
@@ -163,6 +208,32 @@ pub(crate) mod tests {
 
     pub fn area(file: &str, size: u64) -> Area {
         Area { partition: "userdata".into(), file: file.into(), id: "00112233445566778899aabbccddeeff".into(), size, extents: vec![(1 << 20, size)] }
+    }
+
+    #[test]
+    fn an_existing_state_folder_retries_a_failed_ancestor_sync_before_committing() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("skyward/systems.toml");
+        let state = State { installing: Some(Installing { transaction: "00112233445566778899aabbccddeeff".into(), new_store: true }), ..State::default() };
+        let mut attempted = Vec::new();
+        let failed = state.save_with_directory_sync(&path, |dir| {
+            attempted.push(dir.to_path_buf());
+            if dir == root.path() {
+                return Err(std::io::Error::other("ancestor sync failed"));
+            }
+            File::open(dir)?.sync_all()
+        });
+        assert!(failed.is_err());
+        assert!(path.parent().unwrap().is_dir(), "creation succeeded before the sync failed");
+        assert!(!path.exists(), "no state is committed before its directory chain is durable");
+        assert!(attempted.contains(&root.path().to_path_buf()));
+        attempted.clear();
+        state.save_with_directory_sync(&path, |dir| {
+            attempted.push(dir.to_path_buf());
+            File::open(dir)?.sync_all()
+        }).unwrap();
+        assert!(attempted.contains(&root.path().to_path_buf()), "retry must sync the ancestor even though the state folder exists");
+        assert_eq!(State::load(&path).unwrap(), state);
     }
 
     #[test]
@@ -188,6 +259,7 @@ pub(crate) mod tests {
             occupied: Some("_a".into()),
             written: Some(Written { boot: "cc".into(), init_boot: "11".into() }),
             switching: Some(Switching { to: Who::Installed, slot: "_a".into(), saved: false }),
+            installing: None,
         };
         state.save(&path).unwrap();
         assert_eq!(State::load(&path).unwrap(), state);

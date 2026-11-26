@@ -101,6 +101,23 @@ fn unhex(id: &str) -> Result<[u8; 16]> {
     Ok(out)
 }
 
+/// Open only a regular owned file, never a symlink or device. Kept outside
+/// Android's ioctl code so the cleanup admission checks can be host-tested.
+#[cfg(all(unix, any(target_os = "android", test)))]
+fn open_removable(path: &std::path::Path) -> Result<Option<std::fs::File>> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let before = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("inspect {}", path.display())),
+    };
+    ensure!(before.is_file(), "{} is not a regular installation file", path.display());
+    let f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path).with_context(|| format!("open {} without following links", path.display()))?;
+    let opened = f.metadata()?;
+    ensure!(opened.is_file() && opened.dev() == before.dev() && opened.ino() == before.ino(), "{} changed while opening it", path.display());
+    Ok(Some(f))
+}
+
 #[cfg(target_os = "android")]
 mod sys {
     use super::{Area, HEADER};
@@ -306,6 +323,10 @@ mod sys {
             let area = Area { partition, file: path.to_path_buf(), id: super::new_id()?, size, extents };
             area.pieces(0, size)?;
             set_flags(&f, flags(&f)? | FS_IMMUTABLE_FL)?;
+            // The file's name and immutable inode must survive before its
+            // extents can be committed on /metadata as a usable area.
+            f.sync_all().with_context(|| format!("sync {}", path.display()))?;
+            File::open(path.parent().context("an area's file is in a folder")?)?.sync_all()?;
             let device = Path::new(crate::BY_NAME).join(&area.partition);
             ensure!(crate::devnum(&device)? == raw, "{} is not the partition under {}", device.display(), path.display());
             // Written through a device of its own, as everything in the
@@ -367,6 +388,34 @@ mod sys {
             dm::create(name, &self.targets(0, self.size, device)?, false)
         }
 
+        /// Remove a journal-owned file even when allocation stopped before
+        /// an Area or its header existed. The caller supplies only a validated
+        /// transaction path; links and special files are rejected.
+        pub fn remove_path(path: &Path) -> Result<()> {
+            if let Some(f) = super::open_removable(path)? {
+                set_flags(&f, flags(&f)? & !FS_IMMUTABLE_FL)?;
+                f.sync_all()?;
+                let current = fs::symlink_metadata(path)?;
+                let opened = f.metadata()?;
+                ensure!(current.is_file() && current.dev() == opened.dev() && current.ino() == opened.ino(), "{} changed before removal", path.display());
+                fs::remove_file(path).with_context(|| format!("delete {}", path.display()))?;
+            }
+            // Also sync when already absent: a previous unlink may have
+            // succeeded just before a crash or a directory-sync failure.
+            let mut directory = path.parent();
+            loop {
+                let at = directory.context("an area's file is in a folder")?;
+                match File::open(at) {
+                    Ok(d) => return d.sync_all().with_context(|| format!("sync {}", at.display())),
+                    // /data may have been wiped while the journal on
+                    // /metadata survived; persist the missing directory at
+                    // the closest ancestor that still exists.
+                    Err(e) if e.kind() == ErrorKind::NotFound => directory = at.parent(),
+                    Err(e) => return Err(e).with_context(|| format!("open {}", at.display())),
+                }
+            }
+        }
+
         /// Let the file go: no longer immutable, then deleted, and its
         /// blocks are the filesystem's again.
         pub fn remove(&self) -> Result<()> {
@@ -390,6 +439,25 @@ mod tests {
 
     fn area(extents: &[(u64, u64)], size: u64) -> Area {
         Area { partition: "userdata".into(), file: "/data/skyward/a".into(), id: "00112233445566778899aabbccddeeff".into(), size, extents: extents.to_vec() }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unfinished_area_cleanup_only_opens_regular_files_without_following_links() {
+        let dir = std::env::temp_dir().join(format!("skyward-area-cleanup-{}", new_id().unwrap()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("owned");
+        std::fs::write(&file, b"partial allocation").unwrap();
+        assert!(open_removable(&file).unwrap().is_some());
+        assert!(open_removable(&dir.join("missing")).unwrap().is_none());
+        assert!(open_removable(&dir).is_err());
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        assert!(open_removable(&link).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"partial allocation");
+        std::fs::remove_file(&link).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[test]

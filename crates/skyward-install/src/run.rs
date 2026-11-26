@@ -466,6 +466,9 @@ fn install_system(ctx: &Context, contents: &skyward_systems::package::Contents) 
         return refused(Refusal::SystemInstalled(other.name));
     }
     let slot = skyward_vab::current_slot()?.context("not an A/B phone")?;
+    // Recover an interrupted allocation before counting space: its files can
+    // otherwise make every offered root size appear too large to install.
+    skyward_systems::install::prepare_install()?;
     let room = skyward_systems::install::room_now(slot)?;
     let sizes = skyward_systems::install::sizes(contents.least(), room);
     if sizes.is_empty() {
