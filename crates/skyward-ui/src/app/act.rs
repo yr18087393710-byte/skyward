@@ -3,6 +3,39 @@
 use super::*;
 
 impl App {
+    /// Read `url`, or the address the field holds where `None` is given,
+    /// into the browser; a page reached from a link takes the field's place
+    /// in the pages seen, and one typed past a page already seen gives up
+    /// what was ahead.
+    fn browse_to(&mut self, url: Option<String>, now: u64) -> Vec<Effect> {
+        let l = self.state.lang;
+        if self.state.browsing.loading() {
+            self.say(l.pick(["正在打开网页", "正在開啟網頁", "A page is opening"]), now);
+            return Vec::new();
+        }
+        let addressed = match url {
+            Some(url) => Some(url),
+            None => skyward_net::page::address(&self.state.browse_url),
+        };
+        let Some(url) = addressed else {
+            self.say(l.pick(["请输入网页地址", "請輸入網頁位址", "Type a web address"]), now);
+            return Vec::new();
+        };
+        if self.state.trail.get(self.state.trail_at) != Some(&url) {
+            // Going somewhere else from a page gone back to gives up the
+            // pages that were ahead of it.
+            if self.state.trail.len() > self.state.trail_at + 1 {
+                self.state.trail.truncate(self.state.trail_at + 1);
+            }
+            self.state.trail.push(url.clone());
+            self.state.trail_at = self.state.trail.len() - 1;
+        }
+        self.state.browse_url = url.clone();
+        self.state.browsing = Browsing::Loading;
+        self.refresh();
+        vec![Effect::Browse(url)]
+    }
+
     /// Carry out a tapped control.
     pub(super) fn act(&mut self, action: Action, now: u64) -> Vec<Effect> {
         let l = self.state.lang;
@@ -79,6 +112,53 @@ impl App {
                 if self.fetching() {
                     return vec![Effect::StopFetch];
                 }
+            }
+            // The browser reads the address it is given, and the links it
+            // finds; the pages read are kept in the order they were seen, so
+            // that back and forward walk them.
+            Action::BrowseGo => return self.browse_to(None, now),
+            Action::BrowseStop => {
+                if self.state.browsing.loading() {
+                    return vec![Effect::StopBrowse];
+                }
+            }
+            Action::BrowseLink(i) => {
+                let Some(page) = self.state.browsing.page() else { return Vec::new() };
+                let Some(link) = page.links.get(i).map(|l| l.url.clone()) else { return Vec::new() };
+                return self.browse_to(Some(link), now);
+            }
+            Action::BrowseBack => {
+                if self.state.trail_at > 0 {
+                    self.state.trail_at -= 1;
+                    let url = self.state.trail[self.state.trail_at].clone();
+                    return self.browse_to(Some(url), now);
+                }
+            }
+            Action::BrowseForward => {
+                if self.state.trail_at + 1 < self.state.trail.len() {
+                    self.state.trail_at += 1;
+                    let url = self.state.trail[self.state.trail_at].clone();
+                    return self.browse_to(Some(url), now);
+                }
+            }
+            Action::BrowseDownload => {
+                let url = match self.state.browsing.page().map(|p| p.url.clone()).or_else(|| {
+                    let typed = self.state.browse_url.trim();
+                    match typed.is_empty() {
+                        true => None,
+                        false => skyward_net::page::address(typed),
+                    }
+                }) {
+                    Some(url) => url,
+                    None => {
+                        self.say(l.pick(["请先打开一个网页", "請先開啟一個網頁", "Open a page first"]), now);
+                        return Vec::new();
+                    }
+                };
+                self.state.fetch_url = url;
+                self.state.fetch = Fetch::Idle;
+                self.open(Screen::Fetch);
+                return Vec::new();
             }
             // An address too long to type can be put in a file from a computer
             // and taken from there with one tap.
@@ -522,7 +602,13 @@ impl App {
                 }
             }
             Action::ClearSearch => {
-                self.state.search.clear();
+                // The button empties the field the page types into, which on
+                // the search page is the search and on the download and
+                // browser pages the address.
+                match self.text_field() {
+                    Some(field) => field.clear(),
+                    None => self.state.search.clear(),
+                }
                 self.edits += 1;
                 self.refresh();
             }
@@ -891,20 +977,32 @@ impl App {
 
     /// The text the keyboard types into on this page.
     fn typing(&mut self) -> &mut String {
+        let screen = self.screen();
+        match self.text_field() {
+            Some(field) => field,
+            None => panic!("{screen:?} has no text field"),
+        }
+    }
+
+    /// The text field of the page shown, where it has one: the address on the
+    /// download, browser and search pages, the lock's code, a new name, or a
+    /// password.
+    fn text_field(&mut self) -> Option<&mut String> {
         match self.screen() {
-            Screen::Search => &mut self.state.search,
-            Screen::Decrypt => &mut self.state.code,
-            Screen::Rename => &mut self.state.new_name,
-            Screen::WlanPassword => &mut self.state.password,
-            Screen::Fetch => &mut self.state.fetch_url,
+            Screen::Search => Some(&mut self.state.search),
+            Screen::Decrypt => Some(&mut self.state.code),
+            Screen::Rename => Some(&mut self.state.new_name),
+            Screen::WlanPassword => Some(&mut self.state.password),
+            Screen::Fetch => Some(&mut self.state.fetch_url),
+            Screen::Browser => Some(&mut self.state.browse_url),
             Screen::WlanAdd => {
-                let a = self.state.adding.as_mut().expect("the page adds a network");
+                let a = self.state.adding.as_mut()?;
                 match a.field {
-                    Field::Name => &mut a.name,
-                    Field::Password => &mut self.state.password,
+                    Field::Name => Some(&mut a.name),
+                    Field::Password => Some(&mut self.state.password),
                 }
             }
-            s => panic!("{s:?} has no text field"),
+            _ => None,
         }
     }
 
@@ -942,6 +1040,9 @@ impl App {
                 // Return starts the download, or stops the one under way.
                 Screen::Fetch if self.fetching() => return self.act(Action::FetchStop, now),
                 Screen::Fetch => return self.act(Action::FetchStart, now),
+                // Return opens the page, or stops the one being opened.
+                Screen::Browser if self.state.browsing.loading() => return self.act(Action::BrowseStop, now),
+                Screen::Browser => return self.act(Action::BrowseGo, now),
                 Screen::Decrypt if self.state.code.is_empty() => self.say(l.pick(["请输入锁屏密码", "請輸入螢幕鎖定密碼", "Enter the screen lock"]), now),
                 Screen::Decrypt => {
                     let code = std::mem::take(&mut self.state.code);

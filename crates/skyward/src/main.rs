@@ -13,6 +13,8 @@ mod apps;
 mod backup;
 mod remember;
 #[cfg(target_os = "android")]
+mod browse;
+#[cfg(target_os = "android")]
 mod decrypt;
 #[cfg(target_os = "android")]
 mod fetch;

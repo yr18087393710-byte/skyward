@@ -195,6 +195,14 @@ impl App {
                 self.state.part_work = None;
                 self.state.fs_action = FsAction::Repair;
             }
+            // Reading a page stops as the page is left; the pages read stay, so
+            // that coming back shows them again.
+            Screen::Browser => {
+                if self.state.browsing.loading() {
+                    self.state.browsing = Browsing::Idle;
+                    fx.push(Effect::StopBrowse);
+                }
+            }
             Screen::RestoreBackup => {
                 self.state.restore = None;
                 self.state.asking_delete = false;

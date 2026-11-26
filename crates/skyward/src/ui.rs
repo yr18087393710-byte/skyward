@@ -15,6 +15,7 @@ use crate::settings;
 use crate::systems;
 use crate::updates;
 use crate::wipe::{self, Eraser, Step};
+use crate::browse;
 use crate::fetch;
 use crate::wlan;
 use anyhow::{anyhow, ensure, Context, Result};
@@ -1280,6 +1281,8 @@ struct Pages<'a> {
     /// The download under way, and the page another device types an address
     /// for it on.
     fetcher: Option<fetch::Worker>,
+    /// The page the browser is reading, while it reads one.
+    browser: Option<browse::Worker>,
     /// Whether verified boot's checks have been read for the avb page shown.
     avb_read: bool,
     portal: Option<crate::portal::Portal>,
@@ -1529,6 +1532,7 @@ impl<'a> Pages<'a> {
             wlan: None,
             serving: None,
             fetcher: None,
+            browser: None,
             avb_read: false,
             portal: None,
             scanned_at: Instant::now(),
@@ -2615,6 +2619,19 @@ impl Pages<'_> {
                 self.fetcher = None;
             }
         }
+        // How the page the browser asked for ended, once it has.
+        if let Some(worker) = &self.browser {
+            if let Some(end) = worker.ended() {
+                let told = match end {
+                    browse::Ended::Read(page) => skyward_ui::app::Browsing::Read(page),
+                    browse::Ended::Failed(why) => skyward_ui::app::Browsing::Failed(why),
+                    browse::Ended::Stopped => skyward_ui::app::Browsing::Idle,
+                };
+                self.app.state.browsing = told;
+                self.app.refresh();
+                self.browser = None;
+            }
+        }
         // The page another device types an address on is served while the
         // download page shows and the phone is on a network.
         let joined = self
@@ -3231,6 +3248,22 @@ impl Pages<'_> {
             Effect::StopFetch => {
                 if let Some(worker) = &self.fetcher {
                     skyward_sys::kmsg("the download is stopped, as the page asked")?;
+                    worker.stop();
+                }
+            }
+            // A page of the web, read for the browser page.
+            Effect::Browse(url) => {
+                // A thread still reading is never dropped here: dropping it
+                // waits for the server, and the screen would wait with it.
+                ensure!(self.browser.is_none(), "a page is being read already");
+                skyward_sys::kmsg(&format!("reading {url} for the browser"))?;
+                self.app.state.browsing = skyward_ui::app::Browsing::Loading;
+                self.browser = Some(browse::Worker::start(url, self.servers.clone())?);
+                self.app.refresh();
+            }
+            Effect::StopBrowse => {
+                if let Some(worker) = &self.browser {
+                    skyward_sys::kmsg("the page is no longer read, as the page asked")?;
                     worker.stop();
                 }
             }

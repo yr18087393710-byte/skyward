@@ -46,6 +46,7 @@ pub const ENTRIES: &[Entry] = &[
     entry(ADVANCED, HOME, Screen::Advanced, &["gaoji", "gj", "advanced"]),
     entry(["文件管理", "檔案管理", "File manager"], ADVANCED, Screen::Files, &["wenjianguanli", "wjgl", "files", "file"]),
     entry(["终端", "終端機", "Terminal"], ADVANCED, Screen::Terminal, &["zhongduan", "zd", "terminal", "shell"]),
+    entry(["浏览器", "瀏覽器", "Browser"], ADVANCED, Screen::Browser, &["liulanqi", "llq", "browser", "web", "wangye", "wy", "http", "https"]),
     entry(
         ["系统应用", "系統應用程式", "System apps"],
         ADVANCED,

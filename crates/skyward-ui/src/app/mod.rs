@@ -36,6 +36,7 @@ use skyward_vab::{BootSlots, Hold, Slot, SnapshotState, Standing};
 mod act;
 mod apps;
 mod backup;
+mod browser;
 mod decrypt;
 mod draw;
 mod entry;
@@ -64,6 +65,7 @@ mod wlan;
 
 pub use apps::*;
 pub use backup::*;
+pub use browser::*;
 pub use decrypt::*;
 pub use entry::*;
 pub use filesystem::*;
@@ -152,6 +154,9 @@ pub enum Screen {
     /// A file taken from an address typed on the page's keyboard, or handed
     /// over by a page another device opens.
     Fetch,
+    /// A page of the web read over the network the phone is on: its words,
+    /// the links to go on with, and back and forward among the pages seen.
+    Browser,
     /// Verified boot's two checks in the slot the phone runs from, turned on
     /// or off with a swipe.
     Avb,
@@ -266,6 +271,17 @@ pub enum Action {
     FetchStop,
     /// Take the address from a small file a computer put in Downloads.
     FetchFromFile,
+    /// Read the address the browser page's field holds, or stop reading the
+    /// one under way.
+    BrowseGo,
+    BrowseStop,
+    /// Go to the link at this place among the page's links.
+    BrowseLink(usize),
+    /// Go back or forward among the pages read.
+    BrowseBack,
+    BrowseForward,
+    /// Take the page shown as a file into Downloads, on the download page.
+    BrowseDownload,
     /// Start serving the folder the file manager shows, or stop.
     ServeToggle,
     /// Choose the folder served: the file manager's, which is opened for it,
@@ -651,6 +667,10 @@ pub enum Effect {
     /// Take `url` into Downloads, and stop the one under way.
     Fetch(String),
     StopFetch,
+    /// Read the page at this address for the browser, and stop the one
+    /// being read.
+    Browse(String),
+    StopBrowse,
     /// Keep the file manager's order for the starts that follow.
     KeepSort(SortKey, bool, bool),
     /// Read verified boot's checks in the slot the phone runs from.
@@ -1489,6 +1509,11 @@ impl App {
 
     pub fn screen(&self) -> Screen {
         self.top().0
+    }
+
+    /// Whether the browser is reading a page.
+    pub fn browsing(&self) -> bool {
+        self.state.browsing.loading()
     }
 
     fn top(&self) -> &(Screen, f32, Focus) {

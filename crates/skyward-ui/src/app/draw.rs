@@ -958,6 +958,7 @@ mod tests {
             Screen::Backup,
             Screen::Restore,
             Screen::Advanced,
+            Screen::Browser,
             Screen::Files,
             Screen::Terminal,
             Screen::Language,

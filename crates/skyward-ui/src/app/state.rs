@@ -30,6 +30,32 @@ pub enum Fetch {
     Stopped,
 }
 
+/// How a page of the browser stands.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Browsing {
+    /// Nothing asked for yet.
+    #[default]
+    Idle,
+    /// The address asked for, still being read.
+    Loading,
+    Read(skyward_net::page::Page),
+    Failed(String),
+}
+
+impl Browsing {
+    /// The page read, where one has been.
+    pub fn page(&self) -> Option<&skyward_net::page::Page> {
+        match self {
+            Browsing::Read(page) => Some(page),
+            _ => None,
+        }
+    }
+
+    pub fn loading(&self) -> bool {
+        matches!(self, Browsing::Loading)
+    }
+}
+
 /// Choices the pages show and the user changes, and where installing
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
@@ -250,6 +276,12 @@ pub struct State {
     pub fetch_url: String,
     pub fetch: Fetch,
     pub fetch_portal: Option<String>,
+    /// The browser page's address, the page it shows, and the pages it has
+    /// been to, with the one it shows among them.
+    pub browse_url: String,
+    pub browsing: Browsing,
+    pub trail: Vec<String>,
+    pub trail_at: usize,
     /// Whether the WLAN opens as the recovery starts, and whether the
     /// password of the network joined last is kept with the network itself.
     pub wlan_auto: bool,
@@ -377,6 +409,10 @@ impl Default for State {
             fetch_url: String::new(),
             fetch: Fetch::Idle,
             fetch_portal: None,
+            browse_url: String::new(),
+            browsing: Browsing::Idle,
+            trail: Vec::new(),
+            trail_at: 0,
             wlan_auto: false,
             wlan_keep: false,
             joining: None,

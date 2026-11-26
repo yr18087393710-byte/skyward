@@ -1,6 +1,7 @@
 use crate::app::{
     Action, BackupAt, BackupEnd, BackupJob, Check, ClashChoice, Confirm, Damage, Data, Dock, DownloadEnd, EraseStop, Field, FileKind,
     FileOp, FileTask, Folder, Frame, FsAction, FsChoice, FsRow, Have, HeroArt, Hit, Install, JobEnd, Keys, Pick, Place, Rows, Screen,
+    Browsing,
     Fetch, Serving, SkywardCheck, SortKey, SkywardEnd, SkywardJob, SkywardStage, Slider, Source, State, Switch, SystemsWork, Target, UsbDrive, UsbLink, Wipe,
     ADDABLE,
     BACKUP_PARTS, DATA_ERASED, DATA_PARTITION, DOWNLOADS, FASTBOOT_CHOICES, SCREEN_OFF, TARGETS, TIME_ZONES, USB_DRIVE_UNREADABLE,
@@ -97,6 +98,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::Update => update(cx),
         Screen::Serve => serve(cx),
         Screen::Fetch => fetch(cx),
+        Screen::Browser => browser(cx),
         Screen::Avb => avb(cx),
         Screen::SkywardUpdate => skyward_update(cx),
         Screen::License => license(cx),
@@ -2521,45 +2523,149 @@ pub fn fetch(cx: &Ctx) -> Frame {
     Frame { header: false, caret: Some(field.caret), ..Frame::new(t, c, out, title, 0.0) }
 }
 
+/// The browser: the address typed, the way back and on, the page read with
+/// its words and its links, and the keyboard.
+pub fn browser(cx: &Ctx) -> Frame {
+    let (t, f, s, l) = (cx.t, cx.f, cx.state, cx.state.lang);
+    let m = &t.m;
+    let mut c = page(cx);
+    let mut out = Vec::new();
+    let wide = m.w as f32 - m.margin * 2.0;
+    let top = m.content_top - m.dp(66.0);
+    let hint = l.pick(["输入网址，回车打开", "輸入網址，Enter 開啟", "Type an address and press return"]);
+    let field = widgets::search_field(&mut c, t, f, m.margin, wide, top + m.dp(24.0), &s.browse_url, hint);
+    if let Some(rect) = field.clear {
+        out.push(Hit { rect, action: Action::ClearSearch });
+    }
+    let running = s.browsing.loading();
+    let back = s.trail_at > 0;
+    let forward = s.trail_at + 1 < s.trail.len();
+    let has_page = s.browsing.page().is_some();
+    let labels = [
+        (l.pick(["后退", "上一頁", "Back"]), back, Action::BrowseBack),
+        (l.pick(["前进", "下一頁", "Forward"]), forward, Action::BrowseForward),
+        match running {
+            true => (l.pick(["停止", "停止", "Stop"]), true, Action::BrowseStop),
+            false => (l.pick(["打开", "開啟", "Open"]), true, Action::BrowseGo),
+        },
+        (l.pick(["下载", "下載", "Download"]), has_page, Action::BrowseDownload),
+    ];
+    let (gap, bh) = (m.dp(8.0), m.dp(42.0));
+    let bw = (wide - gap * 3.0) / 4.0;
+    let mut y = field.field.y + field.field.h + m.dp(16.0);
+    for (k, (label, on, action)) in labels.iter().enumerate() {
+        let bx = m.margin + k as f32 * (bw + gap);
+        let (fill, ink) = match on {
+            true => (t.pal.search, t.pal.text),
+            false => (t.pal.search, t.pal.section),
+        };
+        c.fill_round_rect(bx, y, bw, bh, bh / 2.0, fill);
+        c.text_center(&f.heading, label, bx + bw / 2.0, y + bh / 2.0, m.sub_px, ink);
+        if *on {
+            out.push(Hit { rect: Rect::new(bx, y, bw, bh), action: action.clone() });
+        }
+    }
+    y += bh + m.dp(18.0);
+    match &s.browsing {
+        Browsing::Idle => {
+            let how = l.pick([
+                "网页在手机连上的网络里读取：先连上 WLAN，再输入网址。文字和链接会显示出来，图片不显示。",
+                "網頁在手機連上的網路裡讀取：先連上 WLAN，再輸入網址。文字和連結會顯示出來，圖片不顯示。",
+                "Pages are read over the network the phone is on: join a WLAN, then type an address. Words and links show; pictures do not.",
+            ]);
+            widgets::footnote(&mut c, t, f, y, how);
+        }
+        Browsing::Loading => {
+            let at = s.browse_url.clone();
+            widgets::progress_card(&mut c, t, f, y, l.pick(["正在打开", "正在開啟", "Opening"]), &at, None);
+        }
+        Browsing::Failed(why) => {
+            widgets::info_card(&mut c, t, f, y, &[(l.pick(["打不开", "打不開", "Could not open"]), why.clone())]);
+        }
+        Browsing::Read(page) => {
+            let x = m.title_x + m.dp(0.9);
+            c.text_top(&f.heading, page.called(), x, y, m.row_title_px, t.pal.text, None);
+            y += m.sub_pitch + m.dp(10.0);
+            if page.text.is_empty() {
+                y = widgets::footnote(&mut c, t, f, y, l.pick(["这一页没有文字。", "這一頁沒有文字。", "This page has no words."]));
+            } else {
+                y = widgets::paragraph(&mut c, t, f, y, &page.text.join("\n"));
+            }
+            if !page.links.is_empty() {
+                y = widgets::section(&mut c, t, f, y, l.pick(["链接", "連結", "Links"]));
+                let shorts: Vec<String> = page.links.iter().map(|link| skyward_net::page::short(&link.url)).collect();
+                let rows: Vec<Row> = page.links.iter().zip(&shorts).map(|(link, short)| Row::new(&link.text).trail(Trail::Value(short))).collect();
+                let block = widgets::list(&mut c, t, f, y, &rows);
+                for (k, rect) in block.rows.iter().enumerate() {
+                    out.push(Hit { rect: *rect, action: Action::BrowseLink(k) });
+                }
+            }
+        }
+    }
+    let enter = match running {
+        true => l.pick(["停止", "停止", "Stop"]),
+        false => l.pick(["打开", "開啟", "Open"]),
+    };
+    keyboard_hits(&mut c, t, f, s, enter, &mut out);
+    Frame { header: false, caret: Some(field.caret), ..Frame::new(t, c, out, l.pick(BROWSER), 0.0) }
+}
+
 pub fn advanced(cx: &Ctx) -> Frame {
     let (t, f, l) = (cx.t, cx.f, cx.state.lang);
     let mut c = page(cx);
     let top = t.m.content_top;
-    // Every day's work first -- the data partition, the partitions, the files'
-    // labels and a shell -- then what reaches the network, then what checks or
-    // records the phone, and last what repairs it.
-    let tools = widgets::list(&mut c, t, f, top, &[
+    // The everyday work of the data partition and the files first, then what
+    // reaches the network, then what the phone runs and keeps, and last what
+    // repairs it: a caption over each card, so that a tool is found where it
+    // is looked for rather than by its place in one long list.
+    let mut rects: Vec<Rect> = Vec::new();
+    let mut actions: Vec<Action> = Vec::new();
+    let mut at = widgets::section_first(&mut c, t, f, top, l.pick(["文件与存储", "檔案與儲存", "Files and storage"]));
+    let files = widgets::list(&mut c, t, f, at, &[
         Row::new(l.pick(DECRYPT)).icon(BLUE, Icon::Lock).trail(Trail::Value(fmt::data(l, &cx.state.data))),
         Row::new(l.pick(["挂载", "掛載", "Mount"])).icon(SLATE, Icon::Mount),
-        Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
-        Row::new(l.pick(APPS)).icon(BLUE, Icon::Gear),
         Row::new(l.pick(FILESYSTEMS)).icon(RED, Icon::Mount),
-        Row::new(l.pick(SERVE)).icon(BLUE, Icon::Globe),
-        Row::new(l.pick(FETCH)).icon(GREEN, Icon::Globe),
-        Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
-        Row::new(l.pick(UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
-        Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
         Row::new(l.pick(["U 盘管理", "USB 隨身碟管理", "USB drive"])).icon(PURPLE, Icon::UsbDrive),
         Row::new(l.pick(RELABEL)).icon(PURPLE, Icon::Shield),
     ]);
-    let out = hits(&tools.rows, &[
+    rects.extend(files.rows);
+    actions.extend([
         Action::Open(Screen::Decrypt),
         Action::Open(Screen::Mount),
-        Action::Open(Screen::Terminal),
-        Action::Open(Screen::Apps),
         Action::Open(Screen::Filesystems),
-        Action::Open(Screen::Serve),
-        Action::Open(Screen::Fetch),
-        Action::Open(Screen::Avb),
-        Action::Open(Screen::Update),
-        Action::Open(Screen::Logs),
         Action::FilesOtg,
         Action::Open(Screen::Relabel),
     ]);
+    at = widgets::section(&mut c, t, f, files.bottom, l.pick(["网络", "網路", "Network"]));
+    let network = widgets::list(&mut c, t, f, at, &[
+        Row::new(l.pick(BROWSER)).icon(GREEN, Icon::Globe),
+        Row::new(l.pick(SERVE)).icon(BLUE, Icon::Globe),
+        Row::new(l.pick(FETCH)).icon(GREEN, Icon::Globe),
+    ]);
+    rects.extend(network.rows);
+    actions.extend([Action::Open(Screen::Browser), Action::Open(Screen::Serve), Action::Open(Screen::Fetch)]);
+    at = widgets::section(&mut c, t, f, network.bottom, l.pick(["系统与安全", "系統與安全", "System and security"]));
+    let system = widgets::list(&mut c, t, f, at, &[
+        Row::new(l.pick(TERMINAL)).icon(SLATE, Icon::Terminal),
+        Row::new(l.pick(APPS)).icon(BLUE, Icon::Gear),
+        Row::new(l.pick(AVB)).icon(RED, Icon::Shield),
+        Row::new(l.pick(UPDATE)).icon(GREEN, Icon::Layers).trail(Trail::Value(update_value(cx))),
+        Row::new(l.pick(LOGS)).icon(ORANGE, Icon::Log),
+    ]);
+    rects.extend(system.rows);
+    actions.extend([
+        Action::Open(Screen::Terminal),
+        Action::Open(Screen::Apps),
+        Action::Open(Screen::Avb),
+        Action::Open(Screen::Update),
+        Action::Open(Screen::Logs),
+    ]);
+    let out = hits(&rects, &actions);
     Frame::new(t, c, out, l.pick(ADVANCED), top)
 }
 
 const RELABEL: Text = ["修复 SELinux 上下文", "修復 SELinux 上下文", "Fix SELinux contexts"];
+const BROWSER: Text = ["浏览器", "瀏覽器", "Browser"];
 const FILESYSTEMS: Text = ["文件系统", "檔案系統", "Filesystems"];
 const STOPPED: Text = ["已停止", "已停止", "Stopped"];
 const STOPPING: Text = ["正在停止", "正在停止", "Stopping"];

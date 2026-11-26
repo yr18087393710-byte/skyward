@@ -395,7 +395,7 @@ fn main() -> Result<()> {
     let adding = |app: &mut App, name: &str, security: Security, field: Field, choosing: bool| {
         app.state.adding = Some(Adding { name: name.into(), security, field, choosing });
     };
-    let pages: [PageShot; 178] = [
+    let pages: [PageShot; 181] = [
         ("11-install-light-locked", Screen::Install, false, &|app| {
             app.state.data = Data::Locked { user: 0, keys: Keys::Digits, checking: false };
         }),
@@ -542,6 +542,25 @@ fn main() -> Result<()> {
             app.state.backup_job = job(true, Vec::new(), None, Some(BackupEnd::Refused(BackupRefusal::DataReset)))
         }),
         ("49-advanced-light", Screen::Advanced, false, &|_| {}),
+        ("120-browser-light", Screen::Browser, false, &|app| {
+            app.browser_read(skyward_net::page::Page {
+                url: "https://example.com/docs/".into(),
+                title: "Example — Documentation".into(),
+                text: vec![
+                    "Getting started".into(),
+                    "Everything this phone needs to be set up again is kept here: the boot images, the backups, and the notes that go with them.".into(),
+                    "Choose a section below to read on.".into(),
+                ],
+                links: vec![
+                    skyward_net::page::Link { text: "Installing a system".into(), url: "https://example.com/docs/install".into() },
+                    skyward_net::page::Link { text: "Downloads".into(), url: "https://example.com/downloads".into() },
+                ],
+            })
+        }),
+        ("120-browser-dark-opening", Screen::Browser, true, &|app| app.state.browsing = skyward_ui::app::Browsing::Loading),
+        ("120-browser-light-failed", Screen::Browser, false, &|app| {
+            app.browser_failed("open https://example.com/: dns: no address for example.com".into())
+        }),
         ("50-files-light", Screen::Files, false, &|app| app.set_files("/".into(), Ok(sample_root()), LISTED)),
         ("51-files-dark", Screen::Files, true, &|app| app.set_files("/".into(), Ok(sample_root()), LISTED)),
         ("52-file-info-light", Screen::FileInfo, false, &|app| app.state.file = sample_root().into_iter().find(|e| e.name == "init.environ.rc")),

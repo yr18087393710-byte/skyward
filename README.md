@@ -52,6 +52,12 @@ read and set properties.
 
 ![Run a root shell right on the phone](slides/en/out/08-terminal.png)
 
+### Browser
+
+Join a WLAN and pages open in the recovery: their words and their links show,
+links take you on, back and forward walk the pages seen, and the page shown can
+be handed to **Download** to keep it on the phone.
+
 ### Connecting a computer
 
 ![Move files and flash partitions over USB](slides/en/out/09-computer.png)
@@ -71,6 +77,10 @@ read and set properties.
 ### Advanced
 
 ![When something breaks, fix it here first](slides/en/out/13-tools.png)
+
+The tools are grouped as **Files and storage**, **Network**, and **System and
+security**, so one is found by what it is for; typing "browser" in the search
+opens the browser too.
 
 ### About phone
 
@@ -162,6 +172,12 @@ Before anything else writes the boot partitions, Skyward puts the installed syst
 boot images back: an install, a slot switch, fastboot, a factory reset, and a backup
 or restore of the boot partitions. The second system waits while a system update is
 still to be merged, and backups of the data partition leave it out.
+
+Before allocating files for a second system, Skyward records which files the
+installation owns on /metadata. A failed or interrupted install is cleaned up on
+the next install or removal, before free space is counted, leaving committed
+systems and saved boot images intact. Leftover files from older versions without
+an installation journal are not deleted automatically.
 
 A second system installs from a zip on the Install page, as any other package does:
 
