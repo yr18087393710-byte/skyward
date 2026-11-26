@@ -36,6 +36,19 @@ writes = [{ path = "/sys/class/touch/touch_dev/enable_touch_raw", value = "0" }]
 [firmware]
 partition = "modem"
 
+# The modem's storage RPCs name /boot/modem_fs1 and /boot/modem_fs2. Android's
+# init runs rmt_storage and tftp_server as core services; the recovery starts
+# the same daemons before any radio clients. A manual recovery test showed
+# rmt_storage serving both volumes, but the radio QMI session and reset remain
+# unresolved.
+[[service]]
+path = "/vendor/bin/rmt_storage"
+libraries = ["/system/lib64", "/vendor/lib64"]
+
+[[service]]
+path = "/vendor/bin/tftp_server"
+libraries = ["/system/lib64", "/vendor/lib64"]
+
 # The persist partition, which the phone mounts at /mnt/vendor/persist and
 # its own recovery leaves unmounted. The WLAN's MAC address is there.
 [partitions]
@@ -136,15 +149,28 @@ ready_property = "vendor.sys.listeners.registered"
 user = "root"
 groups = ["root", "drmrpc"]
 
-# The opener the secure world's apps are reached through by programs that speak
-# to them as GlobalPlatform's TEE client does, which loads those apps from
-# /vendor/firmware_mnt/image as they are first asked for.
+# Keep the verified secure-world order: qseecomd, hlosminkdaemon, then keymint.
+# Android's hlosminkdaemon owns both sockets below.
 [[service]]
 path = "/vendor/bin/hlosminkdaemon"
 libraries = ["/system/lib64", "/vendor/lib64"]
 user = "system"
 groups = ["system", "oem_2912", "wakelock"]
 capabilities = ["WAKE_ALARM", "BLOCK_SUSPEND"]
+
+[[service.sockets]]
+name = "ssgtzd"
+kind = "stream"
+mode = 0o660
+user = "system"
+group = "oem_2912"
+
+[[service.sockets]]
+name = "hlos_mink_opener"
+kind = "stream"
+mode = 0o660
+user = "system"
+group = "system"
 
 # The key service, which is the only thing that can use the keys the phone
 # wrapped in hardware. The same program serves the secure clock and the shared
@@ -197,7 +223,7 @@ groups = ["vendor_nxp_weaver"]
 
 # The modem's own program, the first look at whether a recovery can bring mobile
 # data up at all. The phone's init starts it disabled and lets the framework
-# start it; a recovery runs no framework, so it is started here.
+# start it; a recovery runs no framework, so it is started only during a manual test.
 #
 # It runs as root for now: the account it runs as on the phone, radio, is one of
 # Android's own, written into bionic rather than /vendor/etc/passwd, so it is not
@@ -219,14 +245,15 @@ libraries = ["/system/lib64", "/vendor/lib64"]
 # where ueventd does look and then has the kernel boot the processor. Without this
 # the modem stays offline and every QMI client under it gives up.
 #
-# SCRIPTED BUT NOT STARTED, on purpose: with it on, the modem boots (the kernel
-# says "remote processor 4080000.remoteproc-mss is now up" at 6.2 s, which is the
-# first time a recovery on this phone ever got that far), but 60 to 70 seconds
-# later the phone resets itself -- the modem crashes once nobody serves what it
-# expects, and this phone's watchdog then reboots. A recovery that reboots every
-# minute is worse than one without mobile data, so the line below stays out until
-# the modem's own needs are met. /system/bin/start_modem.sh is kept in the image:
-# put the service back and the modem comes up again.
+# SCRIPTED BUT NOT STARTED: the 2026-11-19 img28 manual test brought MSS up at
+# uptime 228.944 s, served modem FS reads, then at 269.952 s reported
+# dog_hal_common.c:178: DOG detects stalled initialization; the kernel logged
+# disabled remoteproc recovery leading to a device crash. img30 corrected the
+# RFS OEM firmware path, remained running for >10 minutes and served an 8 MiB
+# OEM TFTP request. A later USB return showed bootreason=bootloader; the exit
+# cause is unobserved. QRTR trace saw remote WDS/NAS registrations, but a bounded
+# WDS QMI client-init test still returned -3. Keep MSS manual until a real QMI
+# request/reply and the recovery-exit behavior are both established.
 #
 # [[service]]
 # path = "/vendor/bin/sh"
@@ -234,11 +261,10 @@ libraries = ["/system/lib64", "/vendor/lib64"]
 # oneshot = true
 # libraries = ["/system/lib64", "/vendor/lib64"]
 
-# The QMI daemon the phone's init starts beside the RIL: it reads its socket out
-# of ANDROID_SOCKET_ssgqmig, which init makes for it before starting it, and
-# gives up where that is not there. The socket is said here so the recovery
-# makes it the same way. Off the phone, this is the one that turns the QMI the
-# RIL asks for into the packets the modem's link carries.
+# The QMI daemon whose init service declares ssgqmig. The phone also has
+# hlosminkdaemon owning ssgtzd and hlos_mink_opener; keep those providers distinct.
+# Starting these processes in recovery does not by itself establish a working
+# radio QMI session.
 [[service]]
 path = "/vendor/bin/ssgqmigd"
 libraries = ["/system/lib64", "/vendor/lib64"]
@@ -248,21 +274,9 @@ name = "ssgqmig"
 kind = "seqpacket"
 mode = 0o660
 
-# The second socket the same daemon answers on, and the one the QMI clients
-# the phone's own programs use actually connect to: without it they say
-# "qmi_client_init_instance status: -3" and give up, which is what the RIL and
-# the modem's own programs did here until it was made.
-[[service.sockets]]
-name = "ssgtzd"
-kind = "stream"
-mode = 0o660
-
-# The rest of the phone's radio userspace, as its own init starts it: the QMI
-# priority daemon, the one that brings network interfaces up for the modem's
-# links, and the QMI service the modem's own programs register with. They link
-# only once the recovery carries libcom.android.tethering.connectivity_native.so
-# from the Connectivity APEX, which it does: without it both end as they start
-# with "library ... not found" on their error stream.
+# Radio support daemons also present on Android. Keep their library search path
+# aligned with the recovered Android partition layout; service startup alone
+# does not prove that RIL/QMI or a data call is operational.
 [[service]]
 path = "/vendor/bin/qmipriod"
 libraries = ["/system/lib64", "/vendor/lib64", "/vendor/lib64/hw", "/odm/lib64", "/mnt/system/system/lib64", "/mnt/system/system/lib64/bootstrap"]

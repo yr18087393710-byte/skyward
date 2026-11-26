@@ -2,7 +2,41 @@
 
 2026-11-18 起记。这里只写事实和步骤，写清楚到能直接照着做。
 
-## 最新（2026-11-18 下午，最关键的一条）
+## 最新（2026-11-19）：存储读通，蜂窝数据未通
+
+- 原厂 Android 在 `_b` 槽把 `modem_b` 挂到 `/vendor/firmware_mnt`，把 `modemfirmware_b` 挂到 `/vendor/modem_firmware`。两槽的 `modem.mdt` 摘要相同；没有据此断言所有 `modem.b*` 相同。
+- Recovery 用 `_b` 槽固件并先启动原厂 `rmt_storage`、`tftp_server` 后，日志记录了 MSS `running`、`QRTR: Received HELLO from node 0`、两个 modem FS 卷的成功读取，以及内核 coresight 的 QMI 连接。这证明部分通信已发生，不代表用户态 radio QMI 就绪。
+- 早期一轮 `qrtr-lookup` 仍只有表头、`Modemcomm` 仍返回 `-3`，手机随后重启进入 Android；该轮日志截断，未抓到触发原因。img28 的独立主机采集补齐了故障证据：2026-11-19 11:45–11:46（Asia/Shanghai），MSS 在 uptime `228.943795` 秒启动，`228.973357` 秒收到 node 0 HELLO，`229.100148` 秒完成 modem_fs2 的 4,193,280 字节读取；`269.952059` 秒报告 `dog_hal_common.c:178:DOG detects stalled initialization, triage with IMAGE OWNER`。内核同时记录 remoteproc recovery disabled，随后触发 device crash。已确认 modem 初始化 watchdog 是该轮崩溃触发链，尚未定位哪个初始化依赖停滞。
+- 原厂 `hlosminkdaemon.rc` 把 `ssgtzd` 和 `hlos_mink_opener` 都交给 `hlosminkdaemon`。恢复配置把它们放在已经存在的 `hlosminkdaemon` 服务下，沿用原厂所有者与权限；`ssgqmigd` 保留自己的 `ssgqmig`。这是可验证的配置差异，尚未证明它解释 `-3` 或重启。
+- Recovery 配置让 `rmt_storage`、`tftp_server` 和 `hlosminkdaemon` 先于 radio clients 启动，并保持已验证的 `qseecomd → hlosminkdaemon → keymint` 解密服务顺序；modem 自动启动仍关闭。已用原厂底座和已验证的 img26 二进制生成配置测试镜像 img28（SHA-256 `1cea0b68944d6e5775f698a90ebbe5fc3d629777264548d8d5e674e5f19056a6`），刷入 `recovery_b`。基线采集记录至 uptime 178 秒，手动启动前 uptime 已到 228 秒：MSS 保持 offline、四个 daemon 在运行、Mink 两个监听 inode 由 `hlosminkdaemon` 持有，用户文件约 7.22 秒全部解密。手动启动后九次采样中 MSS 为 running、daemon PID 未变，但 `qrtr-lookup` 仍只有表头，约 41 秒后出现上述 modem 初始化 watchdog 崩溃。随后 ADB 重连确认 Android `sys.boot_completed=1`、槽位 `_b`；`ro.boot.bootreason`、`sys.boot.reason` 和 `sys.boot.reason.last` 均包含 `kernel_panic,panicking,_remoteproc_4080000`，与主机记录一致。完整证据位于主机 `tmp/recovery-capture-20261119-114508/`（`epoch-1-dmesg.txt` 第 3308–3315 行是故障边界）；基线为 `tmp/recovery-capture-20261119-114131/`，重启后属性为 `tmp/img28-post-crash-android.txt`。先验证 `ssgtzd`/`hlos_mink_opener` 的单一监听者与解密回归，再做带主机侧连续内核日志的单次 modem 启动。仅在 radio QMI 持续可用后测试数据呼叫，不以 `running` 或 QRTR HELLO 代替验收。
+
+### 12:00 路径排查：RFS 找不到 OEM 固件
+
+- img28 的完整 logcat 第 16382–16387 行显示 modem 请求 `readonly/firmware/image/modem_oem/qdsp6_oemsw.mbn`，TFTP 将路径解析为 `/vendor/rfs/msm/mpss/readonly/firmware/image/modem_oem/qdsp6_oemsw.mbn` 并返回 `ENOENT`。Android 可读的 symlink 明确是 `/vendor/rfs/msm/mpss/readonly/firmware → /vendor/modem_firmware`；原手动脚本仅把分区挂到临时目录、把 `image/` 绑到 `/etc/firmware`，因此 RFS 的原厂路径缺失。
+- Recovery、MSS offline 状态下，只读挂载当前槽确认文件存在，大小 21,597,436 字节，SHA-256 `8adefa6655edd057d463dd1e587c47c59e187165454c801e71e199737cf695ec`。修改 helper 为同时 bind 整个分区到 `/vendor/modem_firmware`，保留 `image/ → /etc/firmware`；加入 `--stage-only` 验证模式和重复 staging 拒绝。
+- 把新 helper 推到 `/tmp` 后执行 `--stage-only`，MSS 读回仍为 offline；经原厂 RFS 路径读回文件的 SHA-256 与上述一致。这确认修复了路径可达性，尚未证明解决 modem 初始化 watchdog。
+- 后续受控启动命令在 push 探针时即因设备未连接而退出，没有执行新的 MSS start。USB ADB/fastboot 均未枚举，新的主机 capture 从首个样本起就没有连接；离线原因和当前手机启动状态未确定，不能把这次当作新的 modem 测试结果。已刷镜像仍是 img28，仓库 helper 的新改动只推到了临时 `/tmp`，没有重新刷入。
+- 隔离 shell 回归测试已整理到 `devices/pandora/tests/test_modem_staging.py`，使用 Python 标准库 `unittest`，覆盖两个槽位、stage-only 不启动 MSS、正常 start、挂载失败及失败清理、缺失 OEM 固件、已有挂载、无效 mode/slot、非 Recovery、错误 remoteproc 和 MSS 已运行，共 13 个场景通过。测试只在临时目录替换 helper 路径并模拟 mount，不触碰主机或设备挂载。已把该测试接入 `.github/workflows/build.yml` 的 workspace tests 后。
+
+### img29：已打包路径修复，待设备验证
+
+- 生成 `D:/fbwork/flash/img29/skyward-pandora-rfs-path-manual.img`，104,857,600 字节，SHA-256 `8d37623602fd171ab7da8e237a7b9c4a11106aa12fb6436d80d6f1e6cb23bfad`。未刷入，设备仍未通过 USB ADB/fastboot 枚举；不能报告 img29 的启动、解密、TFTP 或 QMI 成功。
+- 打包前校验原厂 recovery 摘要和 img26 复用二进制摘要；打包后 `cat` 取出配置、helper、recovery、system-init，全部与输入 `cmp` 一致。镜像 helper SHA-256 `a52075cdb7f66c1d4a80b364a7fc8a055ba5798f2f66f288351967fdd0cbf694`；配置确认无 modem 自动启动、secure-world 顺序保持。
+- 镜像脚本语法和 9 项隔离行为测试通过。复现脚本 `target/pack-pandora-rfs-path-test.sh`；各文件摘要 `target/pandora-rfs-path-verification/SHA256SUMS`。设备重连后先识别当前模式/槽位，再进行 offline staging 检查；任何 MSS 启动都先开启主机日志，检查 TFTP OEM 固件读取、超过既往 41 秒边界的稳定性和实际 QRTR 服务表。
+
+### img30：MSS 越过 watchdog，蜂窝数据仍未通
+
+- img30 修正 `--stage-only` 验证后的临时挂载清理；配置仍关闭 MSS 自动启动。镜像 SHA-256 `eb6e777b81079c730d9373986c88b1030a98f613627a2d4a8d06d6ecab0886f1`。本地 26 项配置测试及 13 个隔离 staging 场景通过。已确认 `pandora` 槽位 `b`，刷入 `recovery_b`。
+- 启动前 Recovery 中 MSS 为 `offline`，离线核对 `_b` 分区 OEM 文件摘要。仅手动启动一次；从 uptime `167.86` 到 `472.49` 秒的 61 个样本均为 `running`，RFS/Mink/`ssgqmigd` PID 未变。到 uptime `1130.34` 秒仍为 `running`、PID 未变，距手动启动约 16 分钟；本次未复现 img28 的约 41 秒重启。该结果仅覆盖一次启动。
+- 主机 `tmp/img30-tftp-raw.txt` 第 140–148 行：同一 TFTP 请求线程 1648 打开 OEM 固件、传输 8,204,928 字节并报告成功。这确认原厂 RFS 路径可用于实际传输，不代表单笔传完 21,597,436 字节的整个文件。采样日志为 `tmp/img30-mss-samples.txt`。
+- `Qms Ready` 出现在启动 MSS 后；`Modemcomm -3` 和连接 SCA 失败出现在 MSS 启动前，不能据此判定启动后的 SCA 状态。启动后通配和定向 QRTR 查询（WDS=1、NAS=3）仍只有表头；`/dev/socket/qcrild` 为空，未见蜂窝数据接口。尚未验收持续的 radio QMI 请求应答或数据呼叫。原厂在 `sys.boot_completed=1` 时调用 `qrtr-lookup`；本轮已在 Recovery 显式执行，差异仍待定位。
+- MSS 的 `glink-edge.IPCRTR` 设备已绑定 `qcom_smd_qrtr`。ADB shell、TFTP、Mink、`qms` 和 `qcrilNrd` 的网络命名空间均为 `net:[4026531840]`。内核 `qrtr` 模块包含 `qrtr_ns_init` 与 `qrtr_ns_worker`，但符号存在并不证明注册正常。复测挂载 tracefs 后，启动前离线查询产生了 `new-lookup`/`del-client`；手动启动后收到 `hello from 0:-2`，并记录了远端服务注册：`[1:1]@[0:189]`、`[3:1]@[0:193]`，随后还有多个服务注册和 `new-lookup`。这说明 MSS/QRTR 名称服务已经看到 WDS/NAS 服务；同一时刻 `qrtr-lookup` 仍只打印表头，因此该工具输出与已记录服务注册不一致，不能再作为服务不存在的证据。Recovery 内无 framework，因此未启动 `qcrilNrd`，`/dev/socket/qcrild` 与 `/dev/socket/qmux_radio` 为空；`qmipriod`、`qms`、`nicmd`、`ssgqmigd` 则观察为运行中。已对设备自带 `/vendor/bin/qmi-framework-tests/qmi_test_mt_client_init_instance` 做离线字符串检查，按帮助对 WDS service id 1 跑单线程、单次、2 秒限时 `-i 1 -n 1 -d 2000`，客户端 init 两个线程都返回 `rc -3`，工具自身打印 `PASS` 仅表示测试 harness 跑完。未执行 `-q`，它是切换 QMUX transport 的选项，不是给默认 QRTR 测试加一个无害 flag。MSS 仍 running，测试后 daemon PID 未变。结论：QRTR 远端注册已有直接 trace 证据，但 QMI CCI client init 仍失败；优先比较 Recovery 与 Android 的服务启动属性、设备服务配置及 `libqmi_cci` transport 参数。仅在真实 QMI 应答后测试数据呼叫。
+
+- 最后一次在线读取为 Recovery uptime `1294.51` 秒，MSS 仍为 `running`，距启动约 18 分 47 秒。之后 USB 断开并重新枚举为 Android（ADB transport 18，`sys.boot_completed=1`，槽 `_b`）。`ro.boot.bootreason`、`sys.boot.reason`、`sys.boot.reason.last` 均为 `bootloader`，不同于 img28 的 `kernel_panic`；没有覆盖退出时刻的内核日志，Android ADB 也无权读取 pstore，退出原因未定。Android 侧 MSS 的 IPCRTR 同样绑定 `qcom_smd_qrtr`，并暴露 `qrtr_ns_message`、`qrtr_ns_server_add` 等 tracepoint。复测沿用 img30：在独立 trace 实例中先做离线查询基线，再在一次手动启动前开启有限采集，比较本地 `new-lookup` 和启动期的远端服务注册。
+
+## 历史记录（2026-11-18）：首次启动 MSS
+
+以下保留早期排查过程。涉及 MHI、QRTR 和 socket 所属的旧推断以上方实测与原厂定义为准；其中 `mhi_110e_00.01.00` 属于 WLAN，并非蜂窝 modem。
 
 **modem 在恢复系统里开机了。** 这是这台机器上第一次：
 
@@ -22,8 +56,7 @@ echo start > /sys/class/remoteproc/remoteproc2/state
 脚本在 `devices/pandora/system/bin/start_modem.sh`。
 
 **但它在配置里是注释掉的**，因为：modem 起来后 **60～70 秒整机会自己重启**
-（modem 崩溃 → 小米的 watchdog 重启）。要排查的是 modem 起来后缺的服务
-（最像的是给 modem 提供 EFS/文件的那层，Android 上由它自己的服务做）。
+（此处是首次自动启动试验的现象；触发原因未确认）。后续试验补齐存储服务后仍出现重启，见上文。
 判据：modem 起来后 `qrtr-lookup` 里出现服务、`qcrilNrd` 不再报
 `qmi_client_init_instance status: -3`、`/dev/socket/qcrild/rild0` 出现。
 
@@ -46,9 +79,7 @@ MHI 通道                /sys/bus/mhi/devices/ 里有 ADSP_0..3、IPCR、LOOPBA
 `/dev/socket/ssgqmig`（监听态），**没有客户端**；`qcrilNrd` 也没打开任何 mhi/smdcntl 设备，
 只有两个 socket 和它的 DB。
 
-**一个被推翻的假设**：先前以为 qrtr 名字表空就是 modem 没起来。**错**——`qrtr-lookup`
-在 Android 里同样是空的（这台机器的 modem 走 glink/smd，不走 QRTR 名字服务）。所以别再用
-它判断 modem 死活。
+`qrtr-lookup` 空表不能单独判断 modem 是否运行。原厂 Android 上普通 ADB shell 无权执行这个程序，不能把 `Permission denied` 当成空表；Recovery 上后来同时观测到了 QRTR HELLO 和空表。
 
 **下一步**：把 Android 里 `qcrilNrd` 的真实 fd 列表和 `/dev/socket/qmux_radio/` 里的内容
 抓下来（一次 `adb reboot` 就够），就知道它期望的传输是什么——是 `/dev/socket/qmux_radio`
@@ -90,9 +121,9 @@ Modem、Network、Sim、Voice、UimRemote、Lpa 全部注册），然后**卡死
 TWRP 一类的 recovery 从来不做移动数据，原因不是做不到，而是没人愿意碰 RIL/QMI。我们这台
 有全部条件：分区能读、能起厂商进程、有完整的网络栈。
 
-## 2026-11-18 傍晚：根因抓到了（strace 证据）
+## 2026-11-18 傍晚：启动 MSS 前的 QRTR 跟踪
 
-用户态这半边**已经打通**，卡的是**调制解调器本身**：
+当时 `qcrilNrd` 发出了 QRTR 查询，但在跟踪窗口内没有收到回复：
 
 ```
 qcrilNrd 建 AF_QIPCRTR socket 后，向所有节点广播 QRTR 查询：
@@ -101,23 +132,9 @@ qcrilNrd 建 AF_QIPCRTR socket 后，向所有节点广播 QRTR 查询：
 没有任何 recvfrom 回答。
 ```
 
-QRTR 查不到 = **modem 没在 QRTR 总线上出现**。旁证：`/dev/mhi*` 只有 `pipe_0`，
-`/sys/bus/mhi/devices/` 里 ADSP/IPCR 通道有名字但没有 up；内核只到「把
-`/firmware/image/peach/amss20.bin` 交给 mhi」这一步，之后没有 modem 的 boot 日志。
+这个跟踪只说明当时没有收到回复。后续手动启动 MSS 后，内核收到 QRTR HELLO，但 `qrtr-lookup` 仍只有表头；两者观察的是不同阶段。`/firmware/image/peach/amss20.bin` 的 MHI 加载属于 WLAN，不能用来判断蜂窝 modem 是否启动。
 
-同一个 binary 在 Android 里正常，所以不是程序的问题，是**这台机器在 recovery 启动路径下
-modem 没有被拉起来**。
-
-顺带查清的两件事：
-
-- `/dev/socket/ssgtzd` 是 QMI 客户端真正连的 socket（Android 里它有监听和多条连接），
-  已加进配置由 `ssgqmigd` 一起提供，`-3` 报错依旧，因为传输层本身没有 modem 回应
-- `libcom.android.tethering.connectivity_native.so`、`libandroid_net.so`、
-  `libnetd_client.so` 三个库必须带进恢复系统，否则 `nicmd`/`qms` 连启动都不行
-
-**下一步（独立工程）**：找 modem 在 Android 启动路径里是被谁拉起来的。候选：
-`rmtfs` 之类的文件服务、ABL/XBL 阶段的差异、或 `qmi_rmnet`/`mhi` 驱动的 boot 序列。
-判据很干脆：在恢复系统里让 QRTR 广播收到回答，`/dev/mhi*` 出现 IPCR/DUN 通道。
+`nicmd` / `qms` 的历史链接问题涉及 `libcom.android.tethering.connectivity_native.so`、`libandroid_net.so` 和 `libnetd_client.so`。动态库可加载不等于 radio QMI 已经可用。
 
 ## 现有资产（不用重写）
 

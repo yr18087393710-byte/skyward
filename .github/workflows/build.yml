@@ -64,6 +64,8 @@ jobs:
         run: cargo clippy --workspace --all-targets
       - name: Test
         run: cargo test --workspace
+      - name: Test pandora recovery modem staging
+        run: python3 devices/pandora/tests/test_modem_staging.py
       - name: Lint what runs on the phone
         run: cargo ndk -t arm64-v8a --platform 30 clippy --workspace --all-targets
 

@@ -848,6 +848,36 @@ mod tests {
     }
 
     #[test]
+    fn pandora_routes_mink_sockets_to_the_stock_daemon_without_starting_mss() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/pandora.toml")).unwrap();
+        for (name, provider, kind, user, group) in [
+            ("ssgtzd", "/vendor/bin/hlosminkdaemon", SocketKindName::Stream, Some("system"), Some("oem_2912")),
+            ("hlos_mink_opener", "/vendor/bin/hlosminkdaemon", SocketKindName::Stream, Some("system"), Some("system")),
+            ("ssgqmig", "/vendor/bin/ssgqmigd", SocketKindName::Seqpacket, None, None),
+        ] {
+            let mut owners = cfg.services.iter().flat_map(|service| {
+                service.sockets.iter().filter(move |socket| socket.name == name).map(move |socket| (service.path.as_str(), socket))
+            });
+            let (path, socket) = owners.next().unwrap_or_else(|| panic!("{name} has no provider"));
+            assert!(owners.next().is_none(), "{name} has multiple providers");
+            assert_eq!((path, socket.kind, socket.mode, socket.user.as_deref(), socket.group.as_deref()), (provider, kind, Some(0o660), user, group));
+        }
+        for daemon in ["/vendor/bin/rmt_storage", "/vendor/bin/tftp_server"] {
+            assert_eq!(cfg.services.iter().filter(|service| service.path == daemon).count(), 1, "{daemon} must be staged once");
+        }
+        let position = |path: &str| cfg.services.iter().position(|service| service.path == path).unwrap();
+        let mink = position("/vendor/bin/hlosminkdaemon");
+        assert!(position("/vendor/bin/qseecomd") < mink);
+        assert!(mink < position("/vendor/bin/hw/android.hardware.security.onekeymint-service-qti"));
+        for daemon in ["/vendor/bin/rmt_storage", "/vendor/bin/tftp_server", "/vendor/bin/hlosminkdaemon"] {
+            assert!(position(daemon) < position("/vendor/bin/ssgqmigd"));
+        }
+        assert!(cfg.services.iter().all(|service| {
+            !service.path.ends_with("/start_modem.sh") && !service.args.iter().any(|arg| arg.contains("/start_modem.sh"))
+        }));
+    }
+
+    #[test]
     fn each_phone_names_the_stock_build_its_recovery_is_made_on() {
         for (text, version) in [
             (include_str!("../../../devices/nezha.toml"), "OS4.0.4.0.XPACNXM"),
